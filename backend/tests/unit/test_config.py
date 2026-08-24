@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 
 from app.config.risk_config import RiskConfig
-from app.config.settings import Settings, TradingMode
+from app.config.settings import AppEnv, Settings, TradingMode
 from tests.conftest import make_settings
 
 
@@ -157,3 +157,44 @@ class TestFlatEnvVarsReachNestedSections:
         settings = Settings(_env_file=None)
         assert settings.binance.testnet is False
         assert settings.trading.live_trading_enabled is True
+
+
+class TestWindowsLineEndings:
+    """A CRLF `.env` must not break startup (§67).
+
+    `.env` is produced by copying `.env.example` on Windows, and Docker Compose
+    forwards env_file values verbatim -- trailing \\r included.  Unstripped,
+    that makes `true\\r` an invalid boolean and takes the whole app down at
+    import, before any error handling exists to explain it.
+    """
+
+    def test_booleans_survive_crlf(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BINANCE_TESTNET", "true\r")
+        monkeypatch.setenv("LIVE_TRADING_ENABLED", "false\r")
+        settings = Settings(_env_file=None)
+        assert settings.binance.testnet is True
+        assert settings.trading.live_trading_enabled is False
+
+    def test_enums_survive_crlf(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("APP_ENV", "development\r")
+        monkeypatch.setenv("TRADING_MODE", "PAPER\r")
+        settings = Settings(_env_file=None)
+        assert settings.env is AppEnv.DEVELOPMENT
+        assert settings.trading.mode is TradingMode.PAPER
+
+    def test_ints_and_credentials_survive_crlf(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("POSTGRES_PORT", "5432\r")
+        monkeypatch.setenv("POSTGRES_PASSWORD", "secret123\r")
+        database = Settings(_env_file=None).database
+        assert database.port == 5432
+        assert database.password == "secret123"
+        assert make_url(database.sync_url).password == "secret123"
+
+    def test_lists_survive_crlf(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CORS_ALLOW_ORIGINS", "http://a,http://b\r")
+        assert Settings(_env_file=None).cors_allow_origins == [
+            "http://a",
+            "http://b",
+        ]

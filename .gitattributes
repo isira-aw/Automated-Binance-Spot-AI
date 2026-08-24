@@ -1,0 +1,17 @@
+# Normalise line endings.  Windows is the primary development machine (§67),
+# so files the toolchain parses byte-for-byte must not pick up CRLF.
+* text=auto
+
+# Docker Compose passes env_file values through verbatim, trailing \r included,
+# which corrupts booleans, ints and enums.  Keep these LF on every platform.
+.env.example    text eol=lf
+*.env           text eol=lf
+
+# Executed inside Linux containers.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+
+# PowerShell wrappers stay CRLF for Windows.
+*.ps1           text eol=crlf

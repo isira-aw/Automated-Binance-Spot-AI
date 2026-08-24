@@ -16,7 +16,14 @@ from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.config.risk_config import RiskConfig
@@ -27,6 +34,24 @@ from app.config.risk_config import RiskConfig
 PROJECT_ROOT = Path(
     os.environ.get("APP_PROJECT_ROOT") or Path(__file__).resolve().parents[3]
 ).resolve()
+
+
+def _strip_line_endings(data: object) -> object:
+    """Trim stray CR/LF from raw environment values.
+
+    Windows is the primary development machine (§67) and `.env` is produced by
+    copying `.env.example`, so the file routinely has CRLF endings.  Docker
+    Compose passes the trailing \r through as part of the value, which turns
+    `BINANCE_TESTNET=true` into `'true\r'` -- not a valid boolean -- and takes
+    the whole application down at import.  Only line endings are removed; other
+    whitespace is left intact in case a value legitimately contains it.
+    """
+    if not isinstance(data, dict):
+        return data
+    return {
+        key: value.strip("\r\n") if isinstance(value, str) else value
+        for key, value in data.items()
+    }
 
 
 def _parse_str_list(value: object) -> object:
@@ -66,6 +91,11 @@ class EnvModel(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _trim_line_endings(cls, data: object) -> object:
+        return _strip_line_endings(data)
 
 
 class AppEnv(str, Enum):
@@ -343,6 +373,11 @@ class Settings(BaseSettings):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     websocket: WebSocketConfig = WebSocketConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _trim_line_endings(cls, data: object) -> object:
+        return _strip_line_endings(data)
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
