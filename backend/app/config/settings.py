@@ -290,6 +290,23 @@ class ModelsConfig(BaseModel):
     feature_version: str = "v1"
     strategy_version: str = "v1"
 
+    # --- LightGBM training (§24, §36, §37) ---------------------------------
+    # Forward-return horizon (in candles) and the neutral-band threshold the
+    # label is built from (app/ml/labeling.py) — not a claim these values are
+    # tuned, only a documented, versioned starting point for the baseline.
+    label_horizon: int = Field(default=4, ge=1)
+    label_threshold: float = Field(default=0.003, ge=0.0)
+    train_fraction: float = Field(default=0.7, gt=0.0, lt=1.0)
+    validation_fraction: float = Field(default=0.15, gt=0.0, lt=1.0)
+    # Below this, a candidate is kept (never deleted, §39) but not promoted to
+    # VALIDATED. 0.34 is barely above the ~0.33 baseline of guessing among
+    # three classes — deliberately unambitious: promotion to PRODUCTION still
+    # requires a backtest (Phase 12) this system does not have yet, so this
+    # bar only gates "is this candidate worth a human looking at."
+    min_validation_accuracy: float = Field(default=0.34, ge=0.0, le=1.0)
+    min_validation_macro_f1: float = Field(default=0.25, ge=0.0, le=1.0)
+    min_training_rows: int = Field(default=500, ge=1)
+
 
 class LLMConfig(EnvModel):
     """Tier 2 — disabled by default; Tier 1 runs without it (§6, §7, §8)."""

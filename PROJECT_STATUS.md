@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 8 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 9 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -154,6 +154,55 @@ and every Tier 2 component `DISABLED`.
   the indicator engine writes, tagged with the same `feature_version` —
   storage convenience only; the two are computed independently.
 
+**Phase 9 — LightGBM baseline model**
+- `app/ml/labeling.py`: three-class label (UP/NEUTRAL/DOWN) from the forward
+  return over a configurable horizon, with a neutral band rather than forcing
+  a direction on noise. Labels are deliberately forward-looking — that is
+  the correct shape for a training target, not a §18 violation; nothing here
+  feeds a label back in as a feature.
+- `app/ml/dataset.py`: a single chronological TRAIN/VALIDATE/TEST split
+  (§36 — never random on temporal data), with rows whose label window would
+  reach across a split boundary dropped from the split on the earlier side of
+  that boundary. This is the real leakage risk in a training pipeline (a
+  label near a split edge "seeing" the next split's prices) and is proven
+  directly: the last training row's forward-return window is checked to land
+  strictly before the first validation row, with a negative control (the trim
+  disabled) demonstrating the same check catches the leak when it's real.
+- `app/ml/lightgbm_model.py`: the low-level `lgb.train`/`Booster` API rather
+  than the sklearn wrapper, so class-probability order is fixed by the
+  integer label encoding with no label-encoder object to keep in sync across
+  a save/load round trip (§78, §80). The feature-column list is persisted
+  alongside the model and re-asserted on load — a tampered or mismatched
+  column list is a hard load-time error, not a silently misaligned matrix.
+- `app/ml/metrics.py`: accuracy, macro F1, per-class precision/recall,
+  log loss, multiclass Brier score (§85 calibration), and one-vs-rest
+  macro ROC-AUC — reported as `null` with an explanatory note (not a
+  fabricated number) when an evaluation window is missing a class (§84
+  "where meaningful").
+- `app/ml/prediction.py`: implements §30a's own documented fusion-score
+  mapping (`P(up) - P(down)` rescaled to [0,1]) as the one central, versioned
+  function every future signal-fusion adapter reuses. Every prediction is
+  stored `shadow_mode=True` unconditionally — no risk engine, paper trading
+  simulator or signal fusion exists yet to act on one, so nothing produced
+  right now can influence a trade even in principle.
+- `app/ml/training.py` orchestrates DATA → FEATURE ENGINEERING → TRAIN →
+  VALIDATION → TEST → MODEL REGISTRY. The §37 steps this system cannot
+  honestly perform yet (BACKTEST, PAPER VALIDATION, promotion to PRODUCTION)
+  are explicitly left out rather than faked — a candidate can reach
+  VALIDATED on ML metrics alone, never PRODUCTION, since §84 states trading
+  metrics are the deciding factor for that and no backtest exists yet
+  (Phase 12). Every run is recorded in `training_runs`, including failed
+  ones (§22's p-hacking guard).
+- `models` API un-pended: `GET /models`, `GET /models/{id}/{version}`,
+  `POST /models/train` (backgrounded, pollable via `GET /models/train/status`,
+  one job at a time — no benefit to contending for the same CPU cores on a
+  laptop, §52), `POST /models/{id}/{version}/predict`.
+- A real route-ordering bug was caught by the API tests: `GET /train/status`
+  was being matched by the earlier `GET /{model_id}/{version}` pattern
+  (both two path segments), so `/train/status` silently ran the registry-
+  detail handler instead — fixed by registering literal-path routes before
+  the dynamic ones.
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -170,9 +219,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 210 | pass |
-| Backend API + WebSocket integration | 34 | pass |
-| Backend database integration | 30 | pass (real PostgreSQL 16); skip without one |
+| Backend unit | 261 | pass |
+| Backend API + WebSocket integration | 38 | pass |
+| Backend database integration | 42 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
@@ -232,22 +281,51 @@ the full REST contract, and the WebSocket protocol.
   what §22's automatic pattern validation (Tier 2, Phase 21) exists for, and
   applies to structure signals feeding the model the same way it applies to
   chart patterns.
+- The LightGBM baseline has not been trained on real market history — every
+  test uses synthetic data (deterministic for plumbing correctness, or a
+  crafted momentum series for "does this pipeline learn anything at all").
+  Whether it clears `min_validation_accuracy`/`min_validation_macro_f1` on
+  real BTC/ETH/BNB history, and what those bars *should* be, is unknown until
+  a real backfill (Phase 6) and feature computation (Phase 7/8) have run and
+  someone actually calls `POST /models/train`.
+- The label horizon (4 candles) and neutral-band threshold (0.3%) are
+  documented starting points, not tuned values — nothing in this system
+  currently searches over them, which is deliberate: an untracked parameter
+  search is exactly the p-hacking risk §22's experiment log exists to guard
+  against, and that search belongs in a later phase with the logging to match.
+- No model has been promoted to PRODUCTION, and nothing in this system can
+  place an order yet regardless (Phase 10/11 don't exist) — every prediction
+  Phase 9 can produce is `shadow_mode=True` by construction, not by policy
+  choice that could be forgotten.
 - `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
   directory; changing it in `.env` afterwards causes an authentication failure
   until the server password is changed to match (see TROUBLESHOOTING.md).
 
 ## Next phase
 
-**Phase 9 — LightGBM baseline model.**
+**Phase 10 — risk engine.**
 
-1. Train on the persisted `technical_features` (indicators + structure) to
-   predict `P(up) / P(neutral) / P(down)` (§24), never raw price.
-2. Walk-forward split (§36) — no random train/test split on temporal data.
-3. Model registry entry (`model_versions`), versioned artifact under
-   `models/candidates/`, recorded hyperparameters and data ranges.
-4. `model_predictions` persisted with `model_version` and `feature_version`
-   for every inference, whether or not it is later used in a trade.
+The highest-authority component (§31): no model, no LLM, no frontend request
+may bypass it. Every risk parameter is already defined once, frozen, in
+`app/config/risk_config.py` (Phase 1) — Phase 10 is the engine that enforces
+those limits, not a place that redefines them.
 
-Then Phase 10 (risk engine) — the highest-authority component, and the one
-every later phase (paper trading, backtesting, signal fusion) must route
-through without exception.
+1. `APPROVED | REJECTED | PAUSED` decisions with a human-readable reason,
+   checked against every §31 parameter: exposure, daily loss, drawdown,
+   consecutive losses, slippage/spread protection, stale-data protection
+   (already computable via `BinanceService.data_is_stale`, Phase 5),
+   API-failure protection (already tracked via `consecutive_failures`,
+   Phase 5), model-health protection.
+2. Position sizing (§32): balance, risk percentage, stop distance, fees,
+   slippage, exchange filters (`SymbolFilters`, Phase 5) — `REJECT:
+   TRADE_NOT_ECONOMIC` is an expected outcome at this account size, not an
+   edge case to special-case away.
+3. `risk_events` persisted for every rejection/pause, not only approvals.
+4. `risk` API un-pended: current state, rejection history, live parameter
+   values (read-only — changing a risk parameter is a Settings concern, not
+   this engine's).
+
+No martingale (§56), no guaranteed-profit language anywhere it touches the
+frontend contract (§57). Then Phase 11 (paper trading simulator) and Phase 12
+(backtesting engine), the first two components that can actually act on a
+risk engine's APPROVED decision.
