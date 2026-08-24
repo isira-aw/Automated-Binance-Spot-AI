@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 6 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 7 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -103,6 +103,37 @@ and every Tier 2 component `DISABLED`.
 - Frontend Data page: real coverage table, backfill trigger, and integrity
   check, wired to the endpoints above — no synthetic data anywhere (§96).
 
+**Phase 7 — technical analysis engine**
+- `app/technical/indicators.py`: every §19 category (trend, momentum,
+  volatility, volume) as pure pandas functions over closed-candle OHLCV.
+  Every function is causal by construction (rolling windows aligned to the
+  current row, recursive EMA/Wilder smoothing, no centred windows or forward
+  shifts) — checked directly by `test_indicators_no_lookahead.py`, which
+  recomputes each indicator on a truncated prefix of a series and asserts the
+  values match the full computation exactly. A negative control (a
+  deliberately centred rolling window) proves the check would actually catch
+  a leak, not just pass by construction.
+- `feature_engine.py` persists one feature row per closed candle to
+  `technical_features`, tagged with `feature_version` (§78); a windowed
+  indicator not yet ready is stored as JSON `null`, never fabricated or
+  silently dropped. `compute_latest` runs incrementally as new candles close;
+  `compute_and_store_all` recomputes the whole stored history after a
+  backfill.
+- The market stream bridge now persists every closed candle it receives (not
+  only backfilled history) and refreshes that symbol/timeframe's feature
+  vector immediately — closing a gap from Phase 5/6 where live closed candles
+  were published to WebSocket clients but never reached PostgreSQL, so
+  features would have silently gone stale outside of manual re-backfills. A
+  failure here degrades (logged, one candle's features delayed) rather than
+  dropping the stream connection (§44).
+- `market` API additions: `GET /features` (filtered to the active
+  `feature_version`), `POST /features/compute`. The backfill job now computes
+  features for whatever it just ingested.
+- RSI's zero-division case (no losses in the window) was found by a unit test
+  expecting the textbook value of exactly 100 and getting NaN instead; fixed
+  to match the standard convention rather than silently dropping the
+  strongest possible trend signal from the feature set.
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -119,9 +150,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 158 | pass |
+| Backend unit | 196 | pass |
 | Backend API + WebSocket integration | 34 | pass |
-| Backend database integration | 18 | pass (real PostgreSQL 16); skip without one |
+| Backend database integration | 29 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
@@ -165,18 +196,29 @@ the full REST contract, and the WebSocket protocol.
   unverified. `POST /market/backfill` is bounded per call (`max_pages`,
   default 200) and resumable, so an unexpectedly large history is a slow
   fix, not a stuck one.
+- Live feature computation on the stream path (persist candle + compute
+  latest features on every closed bar) has only been exercised with a mocked
+  stream in unit tests; it has not run against a real multi-hour live
+  connection. `wma` and `cci` use a per-row Python callback under pandas
+  `rolling().apply()`, which is O(n·period) — fine at today's data volumes,
+  worth profiling once years of 15m history are involved.
+- No frontend surface shows technical features yet; the Data page (Phase 6)
+  covers candle coverage only. A Market/Signals page is the natural home for
+  feature values and is deferred to when Phase 13 (signal fusion) needs one,
+  rather than building a second interim page now.
 - `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
   directory; changing it in `.env` afterwards causes an authentication failure
   until the server password is changed to match (see TROUBLESHOOTING.md).
 
 ## Next phase
 
-**Phase 7 — technical analysis engine.**
+**Phase 8 — market structure engine.**
 
-1. Trend, momentum, volatility and volume indicators (§19) computed from the
-   persisted closed candles, versioned as `feature_version`.
-2. Persist to `technical_features`; never recompute a feature from an
-   incomplete or still-open candle (§16, §18 continue to apply).
-3. Multi-timeframe feature alignment per the 1D/4H/1H/15M rules (§16).
+1. HH/HL/LH/LL, Break of Structure, Change of Character, support/resistance,
+   breakout/breakdown, false breakout (§20) — generated independently of any
+   ML model, from the same closed-candle source technical indicators use.
+2. A dedicated table or an extension of `technical_features`; decide during
+   implementation based on how naturally structure events fit the existing
+   schema versus needing their own event-shaped rows.
 
-Then Phase 8 (market structure) and Phase 9 (LightGBM baseline).
+Then Phase 9 (LightGBM baseline) and Phase 10 (risk engine).
