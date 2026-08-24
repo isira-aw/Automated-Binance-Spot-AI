@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 1 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 5 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -55,6 +55,30 @@ and every Tier 2 component `DISABLED`.
 - Tier labelling: the UI reports which components influence decisions (today:
   none) rather than implying Tier 2 surfaces are live.
 
+**Phase 5 — Binance market-data connector**
+- `BinanceService` over a REST client, WebSocket stream client, market-data
+  service and exchange-metadata cache. Read-only: the package contains no
+  order-placing surface, and no withdrawal endpoint exists anywhere (§70) —
+  both are asserted by tests, not just by convention.
+- Rate limits are read from live `exchangeInfo` and enforced by a weighted
+  sliding window per declared rule. No limit value is hard-coded; the
+  configured fallbacks apply only until the first response arrives (§71).
+- Server-time synchronisation measured against the request midpoint, so
+  latency contributes at most half the round trip. A `-1021` rejection forces
+  a re-sync and one retry rather than widening `recvWindow` (§72).
+- Error taxonomy separating transport, rate-limit, server, request, timestamp
+  and auth failures, each with an explicit retryable/not-retryable rule.
+  Auth errors never echo the signature or secret.
+- `candle_closed` is published only when the exchange's own closed flag is set,
+  and `closed_klines()` drops the in-progress bar — the §16/§18 guard against
+  an open candle reaching feature building.
+- Deterministic mock connector (`app/binance/mock.py`); no test touches the
+  network or uses real credentials (§62, §63).
+- `binance` and `market_data` health probes replace their `NOT_IMPLEMENTED`
+  placeholders. A stale stream reports DEGRADED with trading blocked, and a
+  stream that has never delivered counts as stale.
+- An unreachable exchange degrades startup instead of stopping it (§44).
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -71,8 +95,8 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 46 | pass |
-| Backend API + WebSocket integration | 23 | pass |
+| Backend unit | 143 | pass |
+| Backend API + WebSocket integration | 34 | pass |
 | Backend database integration | 5 | skipped without PostgreSQL |
 | Frontend (vitest) | 10 | pass |
 
@@ -105,24 +129,26 @@ the full REST contract, and the WebSocket protocol.
 - The database integration tests need a running PostgreSQL with migrations
   applied; they skip themselves otherwise. The initial migration has now been
   applied against a real PostgreSQL 16 as well as in the deployed stack.
+- The Binance layer has never been exercised against the live exchange from
+  this environment: every test runs against the deterministic mock or a
+  scripted HTTP transport. Request/response shapes follow the current public
+  documentation, but the first real handshake happens on the target machine,
+  and `/system/health` is where a mismatch will show.
 - `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
   directory; changing it in `.env` afterwards causes an authentication failure
   until the server password is changed to match (see TROUBLESHOOTING.md).
 
 ## Next phase
 
-**Phase 5 — Binance market-data connector.**
+**Phase 6 — historical data ingestion.**
 
-1. `BinanceService` with REST and WebSocket clients, exchange metadata and
-   symbol-filter retrieval.
-2. Rate limits read from live `exchangeInfo`, kept configurable — no
-   hard-coded remembered limit values.
-3. Server-time synchronisation and explicit `recvWindow` error handling.
-4. A mock connector for automated tests; real credentials never used in tests.
-5. Ticker and kline streams publishing `ticker_update` and `candle_closed`,
-   with `candle_closed` gated on the exchange's own closed flag.
-6. `binance` and `market_data` health probes replacing their `NOT_IMPLEMENTED`
-   placeholders.
+1. Backfill maximum available history per symbol and timeframe, paging through
+   `klines` within the declared rate limits; each asset's start date is
+   independent (§17).
+2. Persist to `candles` with the natural key, resumable after interruption.
+3. Integrity validation: duplicates, gaps, timestamp correctness, OHLC
+   consistency, abnormal values, UTC normalisation — recorded in
+   `market_data_metadata` rather than only logged.
+4. Data page in the frontend reporting coverage, gaps and last update.
 
-Then Phase 6 (historical ingestion with integrity validation) and Phase 7
-(technical analysis engine).
+Then Phase 7 (technical analysis engine) and Phase 8 (market structure).

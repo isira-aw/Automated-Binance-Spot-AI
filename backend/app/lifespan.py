@@ -15,9 +15,11 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
+from app.binance.service import BinanceService
 from app.config import Settings
 from app.core.errors import ConfigurationError
 from app.core.logging_config import get_logger
@@ -36,6 +38,7 @@ from app.monitoring.log_stream import WebSocketLogHandler
 from app.services.app_state import load_application_state, record_shutdown, record_startup
 from app.websocket.event_bus import init_event_bus
 from app.websocket.manager import init_connection_manager
+from app.workers.market_stream import start_market_streams
 
 logger = get_logger("lifespan")
 
@@ -92,9 +95,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 extra={"event_type": "system_shutdown_warning"},
                 exc_info=exc,
             )
+        binance = getattr(app.state, "binance", None)
+        if binance is not None:
+            try:
+                await binance.close()
+            except Exception as exc:
+                logger.warning(
+                    "Binance shutdown was not clean",
+                    extra={"event_type": "system_shutdown_warning"},
+                    exc_info=exc,
+                )
         await close_redis()
         await dispose_engine()
         logger.info("Backend stopped", extra={"event_type": "system_shutdown"})
+
+
+def _split_status(payload: dict[str, Any]) -> dict[str, Any]:
+    """Split a service health dict into ComponentStatus fields.
+
+    Everything beyond status/detail becomes metadata, so a component can add
+    diagnostic fields without the health service needing to know about them.
+    """
+    payload = dict(payload)
+    status = ComponentHealth(payload.pop("status"))
+    detail = payload.pop("detail", None)
+    return {
+        "status": status,
+        "detail": detail,
+        "metadata": {k: v for k, v in payload.items() if v is not None},
+    }
 
 
 async def _startup_checks(app: FastAPI, settings: Settings) -> None:
@@ -142,6 +171,44 @@ async def _startup_checks(app: FastAPI, settings: Settings) -> None:
         logger.error(
             "Redis startup check failed",
             extra={"event_type": "startup_redis_failed"},
+            exc_info=exc,
+        )
+
+    await _start_binance(app, settings, problems)
+
+
+async def _start_binance(app: FastAPI, settings: Settings, problems: list[str]) -> None:
+    """Connect to Binance and start market-data streams.
+
+    A failure here degrades the system, it never stops it: the exchange being
+    unreachable must stop new trades while the rest of the application keeps
+    running and reconnecting (§44).
+    """
+    service = BinanceService(settings)
+    app.state.binance = service
+    app.state.market_stream = None
+
+    try:
+        await service.connect()
+    except Exception as exc:
+        service.last_error = str(exc)
+        problems.append(f"Binance unavailable at startup: {exc}")
+        logger.error(
+            "Binance startup check failed",
+            extra={"event_type": "startup_binance_failed"},
+            exc_info=exc,
+        )
+        return
+
+    try:
+        app.state.market_stream = await start_market_streams(
+            service, app.state.event_bus, settings
+        )
+    except Exception as exc:
+        problems.append(f"Market data streams failed to start: {exc}")
+        logger.error(
+            "Market stream startup failed",
+            extra={"event_type": "startup_streams_failed"},
             exc_info=exc,
         )
 
@@ -208,9 +275,21 @@ def _register_health_probes(app: FastAPI, settings: Settings) -> None:
 
     # Components whose engines are not built yet report NOT_IMPLEMENTED rather
     # than a fabricated healthy status (§96).
+    binance: BinanceService | None = getattr(app.state, "binance", None)
+    if binance is not None:
+
+        async def binance_probe() -> ComponentStatus:
+            return ComponentStatus(name="binance", **_split_status(await binance.health()))
+
+        async def market_data_probe() -> ComponentStatus:
+            return ComponentStatus(
+                name="market_data", **_split_status(await binance.market_data_health())
+            )
+
+        service.register("binance", binance_probe)
+        service.register("market_data", market_data_probe)
+
     for name in (
-        "binance",
-        "market_data",
         "trading_engine",
         "risk_engine",
         "technical_engine",
