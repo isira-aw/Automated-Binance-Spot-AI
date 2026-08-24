@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 7 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 8 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -134,6 +134,26 @@ and every Tier 2 component `DISABLED`.
   to match the standard convention rather than silently dropping the
   strongest possible trend signal from the feature set.
 
+**Phase 8 — market structure engine**
+- `app/engines/market_structure.py`: HH/HL/LH/LL sequences, prevailing
+  trend, Break of Structure, Change of Character, support/resistance levels,
+  breakout/breakdown and false breakout (§20) — generated from price action
+  alone, independent of any model.
+- Swing points use a fractal-style window and are attributed to their
+  *confirmation* bar (`index + window`), never their own bar: a swing high
+  cannot be known until enough bars afterward have failed to exceed it. False
+  breakouts go through the same delay a second time (does price revert within
+  `FALSE_BREAKOUT_WINDOW` bars of the break). Getting this attribution wrong
+  is a subtler form of the §18 leak than a centred window, so it gets the same
+  truncated-prefix proof the indicator module uses, plus a deterministic
+  negative control (a single hand-placed peak that is only detectable with
+  enough trailing bars) — and separately, the actual production code was
+  broken on purpose (attributing swings to their own bar) and confirmed the
+  real no-lookahead test catches it before being restored.
+- Structure fields are merged into the same `technical_features` JSONB row
+  the indicator engine writes, tagged with the same `feature_version` —
+  storage convenience only; the two are computed independently.
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -150,9 +170,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 196 | pass |
+| Backend unit | 210 | pass |
 | Backend API + WebSocket integration | 34 | pass |
-| Backend database integration | 29 | pass (real PostgreSQL 16); skip without one |
+| Backend database integration | 30 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
@@ -202,23 +222,32 @@ the full REST contract, and the WebSocket protocol.
   connection. `wma` and `cci` use a per-row Python callback under pandas
   `rolling().apply()`, which is O(n·period) — fine at today's data volumes,
   worth profiling once years of 15m history are involved.
-- No frontend surface shows technical features yet; the Data page (Phase 6)
-  covers candle coverage only. A Market/Signals page is the natural home for
-  feature values and is deferred to when Phase 13 (signal fusion) needs one,
-  rather than building a second interim page now.
+- No frontend surface shows technical features or market structure yet; the
+  Data page (Phase 6) covers candle coverage only. A Market/Signals page is
+  the natural home for both and is deferred to when Phase 13 (signal fusion)
+  needs one, rather than building a second interim page now.
+- Market structure's swing-detection window (`SWING_WINDOW = 5`) and false-
+  breakout confirmation window (`FALSE_BREAKOUT_WINDOW = 3`) are reasonable
+  defaults, not validated against real price action yet — that validation is
+  what §22's automatic pattern validation (Tier 2, Phase 21) exists for, and
+  applies to structure signals feeding the model the same way it applies to
+  chart patterns.
 - `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
   directory; changing it in `.env` afterwards causes an authentication failure
   until the server password is changed to match (see TROUBLESHOOTING.md).
 
 ## Next phase
 
-**Phase 8 — market structure engine.**
+**Phase 9 — LightGBM baseline model.**
 
-1. HH/HL/LH/LL, Break of Structure, Change of Character, support/resistance,
-   breakout/breakdown, false breakout (§20) — generated independently of any
-   ML model, from the same closed-candle source technical indicators use.
-2. A dedicated table or an extension of `technical_features`; decide during
-   implementation based on how naturally structure events fit the existing
-   schema versus needing their own event-shaped rows.
+1. Train on the persisted `technical_features` (indicators + structure) to
+   predict `P(up) / P(neutral) / P(down)` (§24), never raw price.
+2. Walk-forward split (§36) — no random train/test split on temporal data.
+3. Model registry entry (`model_versions`), versioned artifact under
+   `models/candidates/`, recorded hyperparameters and data ranges.
+4. `model_predictions` persisted with `model_version` and `feature_version`
+   for every inference, whether or not it is later used in a trade.
 
-Then Phase 9 (LightGBM baseline) and Phase 10 (risk engine).
+Then Phase 10 (risk engine) — the highest-authority component, and the one
+every later phase (paper trading, backtesting, signal fusion) must route
+through without exception.
