@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiError, apiGet } from '@/lib/api';
+import { ApiError, apiGet, apiPost } from '@/lib/api';
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -64,5 +64,36 @@ describe('apiGet', () => {
     );
 
     await expect(apiGet('/settings')).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('apiPost', () => {
+  it('sends a POST request and returns the parsed body', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(202, { running: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiPost<{ running: boolean }>('/market/backfill')).resolves.toEqual({
+      running: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/market/backfill',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('surfaces the documented error code on failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(422, {
+          error: { code: 'VALIDATION_ERROR', message: 'A backfill is already running.' },
+        }),
+      ),
+    );
+
+    await expect(apiPost('/market/backfill')).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      status: 422,
+    });
   });
 });

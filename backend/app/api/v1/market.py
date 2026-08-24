@@ -1,0 +1,212 @@
+"""Market data namespace: history, coverage and integrity (§17, §59).
+
+Replaces the ``market`` entry in ``not_implemented.py`` now that Phase 5-6
+build it.  Live order-book/ticker reads still go through Binance directly
+(§5); this namespace serves what has actually been persisted, plus the
+controls to backfill and validate it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from fastapi import APIRouter, Query
+
+from app.api.v1.deps import BinanceServiceDep, SessionDep, SettingsDep
+from app.core.errors import ValidationError
+from app.core.logging_config import get_logger
+from app.core.time_utils import timeframe_seconds
+from app.database.session import session_scope
+from app.models.market import Candle, MarketDataMetadata
+from app.schemas.market import (
+    BackfillJobOut,
+    CandleOut,
+    CoverageOut,
+    IntegrityReportOut,
+)
+from app.services.data_integrity import validate_all_configured
+from app.services.historical_ingestion import (
+    DEFAULT_MAX_PAGES,
+    backfill_symbol_timeframe,
+    get_ingestion_tracker,
+)
+
+logger = get_logger("api.market")
+router = APIRouter(prefix="/market", tags=["market"])
+
+
+@router.get("/coverage", response_model=list[CoverageOut], summary="Historical data coverage")
+async def coverage(session: SessionDep) -> list[CoverageOut]:
+    """Per symbol/timeframe: how much history is stored and its last check."""
+    from sqlalchemy import select
+
+    rows = (await session.execute(select(MarketDataMetadata))).scalars().all()
+    return [
+        CoverageOut(
+            symbol=row.symbol,
+            timeframe=row.timeframe,
+            source=row.source,
+            first_candle_open=row.first_candle_open,
+            last_candle_open=row.last_candle_open,
+            candle_count=row.candle_count,
+            missing_candles=row.missing_candles,
+            last_integrity_check=row.last_integrity_check,
+            is_clean=(row.integrity_report or {}).get("is_clean")
+            if row.integrity_report
+            else None,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/candles", response_model=list[CandleOut], summary="Stored closed candles")
+async def candles(
+    session: SessionDep,
+    symbol: str = Query(..., description="e.g. BTCUSDT"),
+    timeframe: str = Query(..., description="e.g. 4h"),
+    limit: int = Query(500, ge=1, le=1000),
+) -> list[CandleOut]:
+    """Closed candles already persisted, most recent first.
+
+    Reads from PostgreSQL, never from Binance directly -- this is what the
+    rest of the system (features, backtests) will see (§16, §18).
+    """
+    from sqlalchemy import select
+
+    try:
+        timeframe_seconds(timeframe)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    rows = (
+        (
+            await session.execute(
+                select(Candle)
+                .where(
+                    Candle.symbol == symbol.upper(),
+                    Candle.timeframe == timeframe,
+                    Candle.is_closed.is_(True),
+                )
+                .order_by(Candle.open_time.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        CandleOut(
+            symbol=row.symbol,
+            timeframe=row.timeframe,
+            open_time=row.open_time,
+            close_time=row.close_time,
+            open=float(row.open),
+            high=float(row.high),
+            low=float(row.low),
+            close=float(row.close),
+            volume=float(row.volume),
+            quote_volume=float(row.quote_volume) if row.quote_volume is not None else None,
+            trades=row.trades,
+            is_closed=row.is_closed,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/backfill",
+    response_model=BackfillJobOut,
+    status_code=202,
+    summary="Start backfilling configured symbols/timeframes",
+)
+async def start_backfill(
+    binance: BinanceServiceDep, settings: SettingsDep
+) -> BackfillJobOut:
+    """Kick off a backfill in the background and return immediately (§76).
+
+    Progress is polled via ``GET /market/backfill/status`` rather than
+    streamed -- ingestion has no WebSocket event type of its own (§13), and
+    inventing one for a single admin action is not worth the protocol churn.
+    """
+    tracker = get_ingestion_tracker()
+    if tracker.current is not None and tracker.current.running:
+        raise ValidationError("A backfill is already running.")
+
+    job = tracker.start()
+    task = asyncio.create_task(_run_backfill(binance, settings, job), name="market-backfill")
+    # A bare create_task() call is eligible for garbage collection mid-run;
+    # keep a strong reference on the tracker for the task's lifetime.
+    tracker.background_task = task
+    task.add_done_callback(lambda _: setattr(tracker, "background_task", None))
+    return BackfillJobOut(**job.to_dict())
+
+
+async def _run_backfill(binance, settings, job) -> None:
+    """Runs outside the request lifecycle: its own session, its own errors.
+
+    A failure on one symbol/timeframe must not abort the others -- partial
+    progress is still useful and is already durable per committed page.
+    """
+    tracker = get_ingestion_tracker()
+    try:
+        async with session_scope() as session:
+            for symbol in settings.trading.assets:
+                for timeframe in settings.trading.timeframes:
+                    try:
+                        result = await backfill_symbol_timeframe(
+                            session,
+                            binance.market_data,
+                            symbol=symbol,
+                            timeframe=timeframe.value,
+                            max_pages=DEFAULT_MAX_PAGES,
+                        )
+                    except Exception as exc:
+                        from app.services.historical_ingestion import IngestionResult
+
+                        result = IngestionResult(
+                            symbol=symbol,
+                            timeframe=timeframe.value,
+                            stopped_reason="error",
+                            error=str(exc),
+                        )
+                        logger.error(
+                            "Backfill failed for one symbol/timeframe",
+                            extra={
+                                "event_type": "backfill_pair_failed",
+                                "symbol": symbol,
+                                "timeframe": timeframe.value,
+                            },
+                            exc_info=exc,
+                        )
+                    job.results.append(result)
+    except Exception as exc:
+        job.error = str(exc)
+        logger.error(
+            "Backfill job failed before completing",
+            extra={"event_type": "backfill_job_failed"},
+            exc_info=exc,
+        )
+    finally:
+        tracker.finish(job)
+
+
+@router.get("/backfill/status", response_model=BackfillJobOut | None, summary="Backfill job status")
+async def backfill_status() -> BackfillJobOut | None:
+    job = get_ingestion_tracker().current
+    return BackfillJobOut(**job.to_dict()) if job is not None else None
+
+
+@router.post(
+    "/integrity/validate",
+    response_model=list[IntegrityReportOut],
+    summary="Validate stored candles for every configured symbol/timeframe",
+)
+async def validate_integrity(
+    session: SessionDep, settings: SettingsDep
+) -> list[IntegrityReportOut]:
+    reports = await validate_all_configured(
+        session,
+        symbols=settings.trading.assets,
+        timeframes=[tf.value for tf in settings.trading.timeframes],
+    )
+    return [IntegrityReportOut(**report.to_dict()) for report in reports]

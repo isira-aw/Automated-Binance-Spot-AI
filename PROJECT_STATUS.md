@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 5 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 6 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -79,6 +79,30 @@ and every Tier 2 component `DISABLED`.
   stream that has never delivered counts as stale.
 - An unreachable exchange degrades startup instead of stopping it (§44).
 
+**Phase 6 — historical data ingestion**
+- `backfill_symbol_timeframe` pages through `klines` from wherever a
+  symbol/timeframe last left off (`market_data_metadata.last_candle_open`),
+  defaulting to a pre-Binance epoch on a first run — each asset's history is
+  independent (§17). A run bounded by `max_pages` resumes cleanly next time
+  rather than restarting from scratch.
+- Only closed candles are ever persisted, via a Postgres `ON CONFLICT DO
+  UPDATE` upsert on the natural key — re-ingesting the same page updates in
+  place rather than duplicating rows.
+- `market_data_metadata` (coverage) is updated per committed page, not only
+  at the end, so an interrupted run leaves accurate progress behind.
+- Integrity validation (`validate_symbol_timeframe`) checks duplicate
+  timestamps, UTC boundary alignment, OHLC consistency, non-positive values
+  and gaps, and persists the report to `market_data_metadata` rather than
+  only logging it. A gap or an unusually large move is recorded but does not
+  by itself mark the data "dirty" — only structural corruption does.
+- `market` API: `GET /coverage`, `GET /candles` (reads from Postgres, never
+  live from Binance), `POST /backfill` (backgrounded, pollable via
+  `GET /backfill/status`), `POST /integrity/validate`. A whole-job failure
+  (e.g. the database becomes unreachable mid-run) is captured on the job
+  rather than disappearing silently.
+- Frontend Data page: real coverage table, backfill trigger, and integrity
+  check, wired to the endpoints above — no synthetic data anywhere (§96).
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -95,10 +119,10 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 143 | pass |
+| Backend unit | 158 | pass |
 | Backend API + WebSocket integration | 34 | pass |
-| Backend database integration | 5 | skipped without PostgreSQL |
-| Frontend (vitest) | 10 | pass |
+| Backend database integration | 18 | pass (real PostgreSQL 16); skip without one |
+| Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
 
@@ -134,21 +158,25 @@ the full REST contract, and the WebSocket protocol.
   scripted HTTP transport. Request/response shapes follow the current public
   documentation, but the first real handshake happens on the target machine,
   and `/system/health` is where a mismatch will show.
+- A real backfill against live Binance history has not been run — a mock
+  bug (it ignored `startTime`, always returning the most recent page) was
+  caught by the ingestion tests and fixed, but the actual data volume and
+  timing of a multi-year, multi-symbol backfill against live rate limits is
+  unverified. `POST /market/backfill` is bounded per call (`max_pages`,
+  default 200) and resumable, so an unexpectedly large history is a slow
+  fix, not a stuck one.
 - `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
   directory; changing it in `.env` afterwards causes an authentication failure
   until the server password is changed to match (see TROUBLESHOOTING.md).
 
 ## Next phase
 
-**Phase 6 — historical data ingestion.**
+**Phase 7 — technical analysis engine.**
 
-1. Backfill maximum available history per symbol and timeframe, paging through
-   `klines` within the declared rate limits; each asset's start date is
-   independent (§17).
-2. Persist to `candles` with the natural key, resumable after interruption.
-3. Integrity validation: duplicates, gaps, timestamp correctness, OHLC
-   consistency, abnormal values, UTC normalisation — recorded in
-   `market_data_metadata` rather than only logged.
-4. Data page in the frontend reporting coverage, gaps and last update.
+1. Trend, momentum, volatility and volume indicators (§19) computed from the
+   persisted closed candles, versioned as `feature_version`.
+2. Persist to `technical_features`; never recompute a feature from an
+   incomplete or still-open candle (§16, §18 continue to apply).
+3. Multi-timeframe feature alignment per the 1D/4H/1H/15M rules (§16).
 
-Then Phase 7 (technical analysis engine) and Phase 8 (market structure).
+Then Phase 8 (market structure) and Phase 9 (LightGBM baseline).
