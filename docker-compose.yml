@@ -1,0 +1,97 @@
+# One-command startup (§5):  docker compose up -d
+#
+# All state lives in bind mounts under ./data, ./models, ./artifacts, ./logs and
+# ./backups — `docker compose down` never destroys it (§4).
+name: binance-spot-ai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trader}
+      POSTGRES_DB: ${POSTGRES_DB:-binance_spot_ai}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trader} -d ${POSTGRES_DB:-binance_spot_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+    volumes:
+      - ./data/cache:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # Applies Alembic migrations, then exits.  The schema is never created
+  # implicitly by the application at startup (§3).
+  migrate:
+    build:
+      context: ./backend
+      target: base
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      APP_PROJECT_ROOT: /project
+    command: ["alembic", "upgrade", "head"]
+    volumes:
+      - ./data:/project/data
+      - ./models:/project/models
+      - ./artifacts:/project/artifacts
+      - ./logs:/project/logs
+      - ./backups:/project/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      target: base
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      APP_PROJECT_ROOT: /project
+    volumes:
+      - ./data:/project/data
+      - ./models:/project/models
+      - ./artifacts:/project/artifacts
+      - ./logs:/project/logs
+      - ./backups:/project/backups
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy

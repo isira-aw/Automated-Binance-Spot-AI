@@ -1,0 +1,8 @@
+Alembic migrations for the Automated Binance Spot AI platform.
+
+The schema is NEVER created automatically at application startup (MASTER PROMPT
+§3).  Apply migrations explicitly:
+
+    docker compose run --rm backend alembic upgrade head
+
+or, in the running stack, `make migrate` / `scripts/migrate.ps1`.
