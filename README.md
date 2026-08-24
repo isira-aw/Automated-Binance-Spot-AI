@@ -30,6 +30,12 @@ cp .env.example .env      # then edit; .env is gitignored
 docker compose up -d
 ```
 
+> **Set `POSTGRES_PASSWORD` before the first `docker compose up`.** PostgreSQL
+> bakes the password into `data/postgres/` when it initialises the cluster and
+> ignores later edits to `.env`, so changing it afterwards makes `migrate` fail
+> with `password authentication failed`. See
+> [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the one-line fix.
+
 | Service  | URL                                        |
 | -------- | ------------------------------------------ |
 | Frontend | http://localhost:3000                      |

@@ -38,6 +38,47 @@ Startup validates configuration first. Two blocking cases:
 - `CORS_ALLOW_ORIGINS=*` with `APP_ENV=production` — set an explicit
   allow-list.
 
+## `migrate` exits 1 with "password authentication failed for user"
+
+```
+service "migrate" didn't complete successfully: exit 1
+```
+
+```
+docker compose logs migrate --tail 15
+...
+FATAL:  password authentication failed for user "trader"
+```
+
+PostgreSQL reads `POSTGRES_PASSWORD` **only when it initialises the cluster**,
+on the very first start. After that the password lives inside
+`data/postgres/`, and editing `.env` has no effect on it — the app then
+connects with the new password while the server still expects the old one.
+
+This bites whenever `docker compose up` was run once before `POSTGRES_PASSWORD`
+was set to its final value.
+
+Fix it without losing data by changing the password on the running server so it
+matches `.env`:
+
+```bash
+docker compose exec postgres psql -U trader -d postgres \
+  -c "ALTER USER trader WITH PASSWORD 'the-password-from-your-env';"
+docker compose up -d
+```
+
+Or, if the database holds nothing worth keeping, discard the cluster and let it
+re-initialise from the current `.env`:
+
+```bash
+docker compose down
+rm -rf data/postgres/*        # PowerShell: Remove-Item -Recurse -Force .\data\postgres\*
+docker compose up -d
+```
+
+Only the second form destroys data. Never run it against a database holding
+trading history you care about — take a backup first (`make backup`).
+
 ## `docker compose down` and my data
 
 `down` never deletes the database, models, artifacts, logs or backups: they are
