@@ -66,7 +66,9 @@ class ModelPrediction(Base):
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
     open_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    predicted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    predicted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     prob_up: Mapped[float] = mapped_column(Numeric(8, 6), nullable=False)
     prob_neutral: Mapped[float] = mapped_column(Numeric(8, 6), nullable=False)
     prob_down: Mapped[float] = mapped_column(Numeric(8, 6), nullable=False)
@@ -95,7 +97,8 @@ class ModelMetric(Base):
     evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metric_set: Mapped[str] = mapped_column(String(32), nullable=False)  # ML | TRADING | CALIBRATION
+    # One of: ML | TRADING | CALIBRATION
+    metric_set: Mapped[str] = mapped_column(String(32), nullable=False)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
 

@@ -112,7 +112,10 @@ class MarketRegime(Base):
     details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     __table_args__ = (
-        UniqueConstraint("symbol", "timeframe", "open_time", "detector_version", name="uq_market_regimes_symbol"),
+        UniqueConstraint(
+            "symbol", "timeframe", "open_time", "detector_version",
+            name="uq_market_regimes_symbol",
+        ),
     )
 
 

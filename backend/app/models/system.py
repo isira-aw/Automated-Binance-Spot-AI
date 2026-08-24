@@ -46,7 +46,9 @@ class ExchangeSetting(Base, TimestampMixin):
     rate_limits: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     server_time_offset_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    __table_args__ = (UniqueConstraint("exchange", "testnet", name="uq_exchange_settings_exchange"),)
+    __table_args__ = (
+        UniqueConstraint("exchange", "testnet", name="uq_exchange_settings_exchange"),
+    )
 
 
 class Asset(Base, TimestampMixin):

@@ -22,7 +22,11 @@ class NewsArticle(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     external_id: Mapped[str] = mapped_column(String(255), nullable=False)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
     headline: Mapped[str] = mapped_column(Text, nullable=False)
     url: Mapped[str | None] = mapped_column(Text)
     body: Mapped[str | None] = mapped_column(Text)
@@ -39,7 +43,11 @@ class MacroEvent(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     importance: Mapped[float | None] = mapped_column(Numeric(6, 4))
@@ -57,7 +65,11 @@ class SentimentScore(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     article_id: Mapped[int | None] = mapped_column(Integer, index=True)
     symbol: Mapped[str | None] = mapped_column(String(32), index=True)
-    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128))
     # Normalised to the unified [0,1] fusion scale (§30a).

@@ -22,8 +22,12 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database.sync_url)
 
+# The URL is deliberately NOT written back with ``config.set_main_option``.
+# Credentials are percent-encoded, and alembic stores main options in a
+# ConfigParser that treats ``%`` as interpolation syntax -- a password
+# containing ``%`` (or any encoded character) would raise ValueError before a
+# connection is ever attempted.  It is passed straight to the engine instead.
 target_metadata = Base.metadata
 
 
@@ -40,8 +44,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    section = dict(config.get_section(config.config_ini_section, {}))
+    section["sqlalchemy.url"] = settings.database.sync_url
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

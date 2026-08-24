@@ -40,7 +40,11 @@ class Signal(Base, TimestampMixin):
     symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
     open_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
     action: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     # Unified [0,1] scale (§30a): 0.5 is neutral.
     score: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
@@ -53,7 +57,7 @@ class Signal(Base, TimestampMixin):
     risk_reason: Mapped[str | None] = mapped_column(Text)
     venue: Mapped[str] = mapped_column(String(24), nullable=False, default="PAPER")
 
-    components: Mapped[list["SignalComponent"]] = relationship(
+    components: Mapped[list[SignalComponent]] = relationship(
         back_populates="signal", cascade="all, delete-orphan", lazy="selectin"
     )
 

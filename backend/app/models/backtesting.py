@@ -44,7 +44,7 @@ class BacktestRun(Base, TimestampMixin):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 
-    trades: Mapped[list["BacktestTrade"]] = relationship(
+    trades: Mapped[list[BacktestTrade]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
     )
 

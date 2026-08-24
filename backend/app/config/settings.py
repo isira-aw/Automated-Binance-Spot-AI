@@ -13,6 +13,7 @@ import os
 from enum import Enum
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +26,24 @@ from app.config.risk_config import RiskConfig
 PROJECT_ROOT = Path(
     os.environ.get("APP_PROJECT_ROOT") or Path(__file__).resolve().parents[3]
 ).resolve()
+
+
+class EnvModel(BaseSettings):
+    """Base for nested config sections that read flat environment variables.
+
+    A plain ``BaseModel`` nested inside ``BaseSettings`` does NOT consult the
+    environment for its own fields -- ``validation_alias`` on such a field is
+    only honoured for explicitly-passed data.  Sections therefore have to be
+    settings sources in their own right, or documented variables like
+    ``POSTGRES_PASSWORD`` are silently ignored in favour of the default.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=(PROJECT_ROOT / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
 
 class AppEnv(str, Enum):
@@ -90,7 +109,7 @@ class PathsConfig(BaseModel):
             path.mkdir(parents=True, exist_ok=True)
 
 
-class DatabaseConfig(BaseModel):
+class DatabaseConfig(EnvModel):
     model_config = ConfigDict(populate_by_name=True)
 
     user: str = Field(default="trader", validation_alias=AliasChoices("POSTGRES_USER"))
@@ -107,8 +126,12 @@ class DatabaseConfig(BaseModel):
     echo: bool = False
 
     def url(self, *, driver: str = "asyncpg") -> str:
+        # Credentials are percent-encoded: a password containing @ : / # or %
+        # would otherwise corrupt the URL and be parsed as host/port garbage.
+        user = quote(self.user, safe="")
+        password = quote(self.password, safe="")
         return (
-            f"postgresql+{driver}://{self.user}:{self.password}"
+            f"postgresql+{driver}://{user}:{password}"
             f"@{self.host}:{self.port}/{self.db}"
         )
 
@@ -121,7 +144,7 @@ class DatabaseConfig(BaseModel):
         return self.url(driver="psycopg")
 
 
-class RedisConfig(BaseModel):
+class RedisConfig(EnvModel):
     model_config = ConfigDict(populate_by_name=True)
 
     host: str = Field(default="redis", validation_alias=AliasChoices("REDIS_HOST"))
@@ -133,7 +156,7 @@ class RedisConfig(BaseModel):
         return f"redis://{self.host}:{self.port}/{self.db}"
 
 
-class BinanceConfig(BaseModel):
+class BinanceConfig(EnvModel):
     """Binance Spot only.  No futures, no margin, no withdrawals (§9, §70)."""
     model_config = ConfigDict(populate_by_name=True)
 
@@ -157,7 +180,7 @@ class BinanceConfig(BaseModel):
         return bool(self.api_key and self.api_secret)
 
 
-class TradingConfig(BaseModel):
+class TradingConfig(EnvModel):
     model_config = ConfigDict(populate_by_name=True)
 
     assets: list[str] = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
@@ -210,7 +233,7 @@ class ModelsConfig(BaseModel):
     strategy_version: str = "v1"
 
 
-class LLMConfig(BaseModel):
+class LLMConfig(EnvModel):
     """Tier 2 — disabled by default; Tier 1 runs without it (§6, §7, §8)."""
     model_config = ConfigDict(populate_by_name=True)
 
@@ -236,7 +259,7 @@ class LLMConfig(BaseModel):
     )
 
 
-class NewsConfig(BaseModel):
+class NewsConfig(EnvModel):
     """Tier 2 — disabled by default (§27)."""
     model_config = ConfigDict(populate_by_name=True)
 
@@ -279,16 +302,16 @@ class Settings(BaseSettings):
     )
 
     paths: PathsConfig = PathsConfig()
-    database: DatabaseConfig = DatabaseConfig()
-    redis: RedisConfig = RedisConfig()
-    binance: BinanceConfig = BinanceConfig()
-    trading: TradingConfig = TradingConfig()
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    binance: BinanceConfig = Field(default_factory=BinanceConfig)
+    trading: TradingConfig = Field(default_factory=TradingConfig)
     risk: RiskConfig = RiskConfig()
     paper_trading: PaperTradingConfig = PaperTradingConfig()
     backtesting: BacktestConfig = BacktestConfig()
     models: ModelsConfig = ModelsConfig()
-    llm: LLMConfig = LLMConfig()
-    news: NewsConfig = NewsConfig()
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    news: NewsConfig = Field(default_factory=NewsConfig)
     websocket: WebSocketConfig = WebSocketConfig()
 
     @field_validator("cors_allow_origins", mode="before")
