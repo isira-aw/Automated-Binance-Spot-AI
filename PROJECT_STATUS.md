@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 9 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 10 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -203,6 +203,38 @@ and every Tier 2 component `DISABLED`.
   detail handler instead — fixed by registering literal-path routes before
   the dynamic ones.
 
+**Phase 10 — risk engine**
+- `app/risk/engine.py`: the highest-authority component (§31). Returns
+  `APPROVED | REJECTED | PAUSED` with a human-readable reason the frontend
+  surfaces verbatim (§101). Every limit is read from `RiskConfig` — this
+  module enforces, it never redefines.
+- Rule ordering is deliberate and tested: system health (emergency stop,
+  stale data, API failures, model health) → account halts (daily loss,
+  drawdown, loss streak) → per-trade checks (spread, volatility, slippage,
+  cooldown, exposure, sizing). The first two produce `PAUSED`, the last
+  `REJECTED`. Evaluating the other way round would let a per-trade rejection
+  mask an account-level halt, reading to an operator as "that trade was bad"
+  when the truth is "trading is stopped".
+- `app/risk/position_sizing.py` (§32): sizes from equity, risk fraction, stop
+  distance, fees and the live exchange filters from Phase 5. Rounds **down**
+  onto the lot grid, never nearest, so a rounding artefact can only reduce
+  risk below a cap and never nudge it above one. `TRADE_NOT_ECONOMIC` is a
+  normal, expected answer at <$50 (§88), never suppressed or forced.
+- Round-trip fees exceeding the amount risked reject the trade (§86): an
+  edge smaller than its own transaction costs is not a trade.
+- No martingale (§56) is enforced structurally, not by convention — risk is
+  a constant fraction of equity, so a losing streak cannot size up; there is
+  a test asserting exactly that.
+- Authority is tested as a property: no `REJECTED`/`PAUSED` assessment ever
+  carries a usable size, so a caller that ignores `decision` still cannot
+  construct an order.
+- `risk_events` records every rejection and pause (never approvals — those
+  become orders, and duplicating one fact across two tables invites them to
+  disagree), so "why didn't it trade?" is answerable after the fact.
+- `risk` API un-pended, read-only by design: `GET /risk/parameters`,
+  `GET /risk/state`, `GET /risk/events`. There is deliberately no endpoint
+  that changes a limit — that is a Settings concern (§64).
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -219,9 +251,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 261 | pass |
-| Backend API + WebSocket integration | 38 | pass |
-| Backend database integration | 42 | pass (real PostgreSQL 16); skip without one |
+| Backend unit | 310 | pass |
+| Backend API + WebSocket integration | 41 | pass |
+| Backend database integration | 46 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
