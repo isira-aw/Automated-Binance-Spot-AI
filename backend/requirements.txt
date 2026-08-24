@@ -21,3 +21,7 @@ httpx==0.28.1
 # ---- Numerics -------------------------------------------------------------
 numpy==2.2.1
 pandas==2.2.3
+
+# ---- Machine learning (Tier 1 baseline, CPU-only) --------------------------
+lightgbm==4.5.0
+scikit-learn==1.6.0
