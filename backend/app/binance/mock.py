@@ -153,9 +153,20 @@ class MockBinanceServer:
 
         # The most recent candle is still open, matching the live API.
         last_open = (self.server_time_ms // step_ms) * step_ms
+
+        start_time = params.get("startTime")
+        if start_time is not None:
+            # Page forward from startTime, exactly like the real endpoint:
+            # up to `limit` candles, stopping at the still-open present candle
+            # rather than fabricating history that has not "happened" yet.
+            first_open = (int(start_time) // step_ms) * step_ms
+            span = max(0, (last_open - first_open) // step_ms) + 1
+            open_times = [first_open + i * step_ms for i in range(min(limit, span))]
+        else:
+            open_times = [last_open - offset * step_ms for offset in range(limit - 1, -1, -1)]
+
         rows: list[list[Any]] = []
-        for offset in range(limit - 1, -1, -1):
-            open_ms = last_open - offset * step_ms
+        for open_ms in open_times:
             index = open_ms // step_ms
             base = self.price(symbol)
             drift = _deterministic_offset(symbol, index) * base / Decimal(100)

@@ -87,3 +87,52 @@ export interface SettingsResponse {
 export interface ApiErrorBody {
   error: { code: string; message: string; metadata?: Record<string, unknown> | null };
 }
+
+// --- Market data (§17, §59) -------------------------------------------------
+
+export interface CoverageEntry {
+  symbol: string;
+  timeframe: string;
+  source: string;
+  first_candle_open: string | null;
+  last_candle_open: string | null;
+  candle_count: number;
+  missing_candles: number;
+  last_integrity_check: string | null;
+  is_clean: boolean | null;
+}
+
+export interface IngestionResultEntry {
+  symbol: string;
+  timeframe: string;
+  pages_fetched: number;
+  candles_inserted: number;
+  candles_updated: number;
+  reached_present: boolean;
+  stopped_reason: string;
+  error: string | null;
+}
+
+export interface BackfillJobResponse {
+  started_at: string;
+  finished_at: string | null;
+  running: boolean;
+  error: string | null;
+  total_candles_inserted: number;
+  results: IngestionResultEntry[];
+}
+
+export interface IntegrityReportEntry {
+  symbol: string;
+  timeframe: string;
+  candle_count: number;
+  expected_count: number | null;
+  missing_candles: number;
+  duplicate_open_times: number;
+  misaligned_timestamps: string[];
+  ohlc_violations: string[];
+  non_positive_values: string[];
+  abnormal_moves: string[];
+  is_clean: boolean;
+  checked_at: string;
+}

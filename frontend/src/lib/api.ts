@@ -17,12 +17,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
-    signal,
-    headers: { Accept: 'application/json' },
-  });
-
+async function parseOrThrow<T>(response: Response, path: string): Promise<T> {
   // /system/health answers 503 with a full body when a component is unhealthy;
   // that is a valid payload, not a transport failure.
   if (!response.ok && !(response.status === 503 && path.startsWith('/system/health'))) {
@@ -36,4 +31,21 @@ export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> 
   }
 
   return (await response.json()) as T;
+}
+
+export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, {
+    signal,
+    headers: { Accept: 'application/json' },
+  });
+  return parseOrThrow<T>(response, path);
+}
+
+export async function apiPost<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    signal,
+    headers: { Accept: 'application/json' },
+  });
+  return parseOrThrow<T>(response, path);
 }
