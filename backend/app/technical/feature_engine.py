@@ -25,8 +25,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging_config import get_logger
+from app.engines.market_structure import compute_all as compute_structure
 from app.models.market import Candle, TechnicalFeature
-from app.technical.indicators import REQUIRED_LOOKBACK, compute_all
+from app.technical.indicators import REQUIRED_LOOKBACK
+from app.technical.indicators import compute_all as compute_indicators
 
 logger = get_logger("technical.feature_engine")
 
@@ -34,6 +36,17 @@ logger = get_logger("technical.feature_engine")
 # real value isn't right at the edge of the loaded window.
 LOOKBACK_BUFFER = 50
 DEFAULT_LOOKBACK = REQUIRED_LOOKBACK + LOOKBACK_BUFFER
+
+
+def _compute_combined(df: pd.DataFrame) -> pd.DataFrame:
+    """Indicator values (§19) and market structure fields (§20) side by side
+    in one feature vector.  Structure is computed independently of any model
+    -- joining it here is only storage convenience, not a dependency on the
+    indicator values it sits next to.
+    """
+    indicators = compute_indicators(df)
+    structure = compute_structure(df)
+    return indicators.join(structure)
 
 
 def _clean_for_json(value: Any) -> Any:
@@ -122,7 +135,7 @@ async def compute_latest(
     if df.empty:
         return False
 
-    features = compute_all(df.set_index("open_time"))
+    features = _compute_combined(df.set_index("open_time"))
     latest = features.iloc[-1]
 
     await _upsert_features(
@@ -150,7 +163,7 @@ async def compute_and_store_all(
     if df.empty:
         return 0
 
-    features = compute_all(df.set_index("open_time"))
+    features = _compute_combined(df.set_index("open_time"))
     stored = await _upsert_features(
         session,
         symbol=symbol,

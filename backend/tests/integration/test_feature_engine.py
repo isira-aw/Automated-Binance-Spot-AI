@@ -253,3 +253,19 @@ async def test_open_candle_is_never_used_for_features(session):
         for key, value in row.features.items():
             if value is not None and key.startswith(("sma", "ema", "wma", "vwap")):
                 assert value < 10000, f"{key} looks contaminated by the open candle: {value}"
+
+
+async def test_structure_fields_are_stored_alongside_indicators(session):
+    """§20: market structure lives in the same feature vector as §19
+    indicators -- one row per candle, both categories present."""
+    await _seed_candles(session, symbol="BTCUSDT", timeframe="1h", count=250)
+    await compute_and_store_all(session, symbol="BTCUSDT", timeframe="1h", feature_version="v1")
+
+    row = (
+        await session.execute(
+            select(TechnicalFeature).order_by(TechnicalFeature.open_time.desc()).limit(1)
+        )
+    ).scalar_one()
+    assert "sma_20" in row.features  # indicator (§19)
+    assert "structure_trend" in row.features  # market structure (§20)
+    assert row.features["structure_trend"] in {"BULLISH", "BEARISH", "UNKNOWN"}
