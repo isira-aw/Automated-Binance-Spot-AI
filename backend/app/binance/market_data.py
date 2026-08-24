@@ -77,6 +77,31 @@ class Kline:
         except (IndexError, TypeError, ValueError, ArithmeticError) as exc:
             raise BinanceRequestError(f"Unparsable kline row: {exc}") from exc
 
+    @classmethod
+    def from_stream_event(cls, event: dict[str, Any]) -> Kline:
+        """Parse the dict produced by :func:`parse_kline_event`.
+
+        Mirrors :meth:`from_rest_row` so a candle looks identical to the rest
+        of the system whether it arrived via backfill or the live stream.
+        """
+        try:
+            return cls(
+                symbol=str(event["symbol"]).upper(),
+                timeframe=str(event["timeframe"]),
+                open_time=_ms_to_utc(int(event["open_time_ms"])),
+                close_time=_ms_to_utc(int(event["close_time_ms"]) + 1),
+                open=Decimal(str(event["open"])),
+                high=Decimal(str(event["high"])),
+                low=Decimal(str(event["low"])),
+                close=Decimal(str(event["close"])),
+                volume=Decimal(str(event["volume"])),
+                quote_volume=Decimal(str(event["quote_volume"])),
+                trades=int(event["trades"]),
+                is_closed=bool(event["is_closed"]),
+            )
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            raise BinanceRequestError(f"Unparsable stream kline event: {exc}") from exc
+
 
 @dataclass(frozen=True)
 class Ticker:

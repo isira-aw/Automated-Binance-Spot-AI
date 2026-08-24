@@ -69,3 +69,11 @@ class IntegrityReportOut(BaseModel):
     abnormal_moves: list[str]
     is_clean: bool
     checked_at: str
+
+
+class FeatureVectorOut(BaseModel):
+    symbol: str
+    timeframe: str
+    open_time: datetime
+    feature_version: str
+    features: dict[str, float | None]

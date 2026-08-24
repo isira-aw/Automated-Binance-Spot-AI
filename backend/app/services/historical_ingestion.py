@@ -150,6 +150,32 @@ async def _update_metadata(
     row.candle_count = (row.candle_count or 0) + inserted
 
 
+async def persist_closed_candle(
+    session: AsyncSession, kline: Kline, *, source: str = "BINANCE"
+) -> None:
+    """Persist a single live closed candle and commit.
+
+    Used by the market stream bridge so every closed bar the exchange reports
+    lands in Postgres the same way a backfilled one does -- the technical
+    engine has only one candle source to trust, not "backfilled history plus
+    whatever the stream happened to keep in memory" (§16, §18).
+    """
+    if not kline.is_closed:
+        raise ValueError("persist_closed_candle received an open candle.")
+
+    inserted, updated = await _upsert_candles(session, [kline], source=source)
+    await _update_metadata(
+        session,
+        symbol=kline.symbol,
+        timeframe=kline.timeframe,
+        source=source,
+        first_open=kline.open_time,
+        last_open=kline.open_time,
+        inserted=inserted,
+    )
+    await session.commit()
+
+
 async def backfill_symbol_timeframe(
     session: AsyncSession,
     market_data: MarketDataService,

@@ -11,11 +11,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.binance.market_data import Kline
 from app.binance.service import BinanceService
 from app.binance.ws_client import BinanceStreamClient, parse_kline_event
 from app.config import Settings
 from app.core.events import Event, EventType
 from app.core.logging_config import get_logger
+from app.database.session import session_scope
+from app.services.historical_ingestion import persist_closed_candle
+from app.technical.feature_engine import compute_latest
 from app.websocket.event_bus import EventBus
 
 logger = get_logger("workers.market_stream")
@@ -54,6 +58,9 @@ class MarketStreamBridge:
             # downstream may act on a bar that can still change.
             return
         self.closed_candles += 1
+
+        await self._persist_and_compute_features(event)
+
         await self._bus.publish(
             Event.of(
                 EventType.CANDLE_CLOSED,
@@ -69,6 +76,45 @@ class MarketStreamBridge:
                 trades=event["trades"],
             )
         )
+
+    async def _persist_and_compute_features(self, event: dict[str, Any]) -> None:
+        """Store the closed candle and refresh its feature vector.
+
+        A failure here must not stop the stream: a websocket-side event still
+        publishes even if this fails, so the frontend keeps seeing live prices
+        while the persistence problem is logged for investigation -- losing
+        one candle's features is recoverable (the next backfill or live candle
+        fixes it), losing the whole stream connection is not (§44).
+        """
+        try:
+            kline = Kline.from_stream_event(event)
+        except Exception as exc:
+            logger.warning(
+                "Discarding an unparsable closed-candle stream event",
+                extra={"event_type": "stream_candle_unparsable"},
+                exc_info=exc,
+            )
+            return
+
+        try:
+            async with session_scope() as session:
+                await persist_closed_candle(session, kline)
+                await compute_latest(
+                    session,
+                    symbol=kline.symbol,
+                    timeframe=kline.timeframe,
+                    feature_version=self._settings.models.feature_version,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to persist a closed candle or compute its features",
+                extra={
+                    "event_type": "stream_candle_persist_failed",
+                    "symbol": kline.symbol,
+                    "timeframe": kline.timeframe,
+                },
+                exc_info=exc,
+            )
 
     async def _handle_ticker(self, data: dict[str, Any]) -> None:
         symbol = data.get("s")
