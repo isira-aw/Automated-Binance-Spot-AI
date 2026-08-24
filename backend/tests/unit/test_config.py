@@ -6,9 +6,10 @@ from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.engine import make_url
 
 from app.config.risk_config import RiskConfig
-from app.config.settings import TradingMode
+from app.config.settings import Settings, TradingMode
 from tests.conftest import make_settings
 
 
@@ -79,3 +80,80 @@ def test_database_url_never_leaks_into_the_repository_defaults():
     settings = make_settings()
     assert settings.database.async_url.startswith("postgresql+asyncpg://")
     assert settings.database.sync_url.startswith("postgresql+psycopg://")
+
+
+class TestEnvListParsing:
+    """List settings are supplied as flat env vars (§64).
+
+    pydantic-settings JSON-decodes list fields from the environment before any
+    validator runs, so a comma-separated value raises SettingsError unless the
+    field opts out with NoDecode.  These fields are populated straight from
+    .env, so the failure surfaces only under a real environment -- which is
+    exactly how it reached a container once already.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (
+                "http://localhost:5173,http://localhost:3000",
+                ["http://localhost:5173", "http://localhost:3000"],
+            ),
+            ('["http://x","http://y"]', ["http://x", "http://y"]),
+            ("http://solo", ["http://solo"]),
+            (" http://a , http://b ", ["http://a", "http://b"]),
+        ],
+    )
+    def test_cors_origins_accepts_csv_and_json(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: list[str]
+    ) -> None:
+        monkeypatch.setenv("CORS_ALLOW_ORIGINS", raw)
+        assert Settings(_env_file=None).cors_allow_origins == expected
+
+    def test_assets_accept_csv_and_are_uppercased(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ASSETS", "btcusdt, ethusdt")
+        assert Settings(_env_file=None).trading.assets == ["BTCUSDT", "ETHUSDT"]
+
+    def test_timeframes_accept_csv(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TIMEFRAMES", "4h,15m")
+        settings = Settings(_env_file=None)
+        assert [tf.value for tf in settings.trading.timeframes] == ["4h", "15m"]
+
+    def test_defaults_apply_when_unset(self) -> None:
+        settings = Settings(_env_file=None)
+        assert settings.cors_allow_origins == ["http://localhost:5173"]
+        assert settings.trading.assets == ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+
+
+class TestFlatEnvVarsReachNestedSections:
+    """Nested sections must read the flat variables documented in .env.example.
+
+    A plain BaseModel nested in BaseSettings never consults the environment, so
+    these were silently ignored in favour of defaults.
+    """
+
+    def test_postgres_credentials_are_honoured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("POSTGRES_PASSWORD", "secret123")
+        monkeypatch.setenv("POSTGRES_HOST", "pg-host")
+        database = Settings(_env_file=None).database
+        assert database.password == "secret123"
+        assert database.host == "pg-host"
+
+    def test_special_characters_survive_url_building(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("POSTGRES_PASSWORD", "p@ss:w0rd/50%x")
+        url = make_url(Settings(_env_file=None).database.sync_url)
+        assert url.password == "p@ss:w0rd/50%x"
+        assert url.host == "postgres"
+
+    def test_safety_toggles_are_honoured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BINANCE_TESTNET", "false")
+        monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+        settings = Settings(_env_file=None)
+        assert settings.binance.testnet is False
+        assert settings.trading.live_trading_enabled is True

@@ -9,14 +9,15 @@ are also honoured.
 from __future__ import annotations
 
 import functools
+import json
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.config.risk_config import RiskConfig
 
@@ -26,6 +27,27 @@ from app.config.risk_config import RiskConfig
 PROJECT_ROOT = Path(
     os.environ.get("APP_PROJECT_ROOT") or Path(__file__).resolve().parents[3]
 ).resolve()
+
+
+def _parse_str_list(value: object) -> object:
+    """Accept both `a,b` and `["a","b"]` for a list field supplied via env.
+
+    Flat environment variables are the documented form (see .env.example), but
+    a JSON array is what pydantic-settings would natively expect, so both are
+    honoured rather than silently mangling one of them.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.startswith("["):
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(decoded, list):
+                return [str(item).strip() for item in decoded]
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 class EnvModel(BaseSettings):
@@ -183,13 +205,14 @@ class BinanceConfig(EnvModel):
 class TradingConfig(EnvModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    assets: list[str] = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-    timeframes: list[Timeframe] = [
-        Timeframe.D1,
-        Timeframe.H4,
-        Timeframe.H1,
-        Timeframe.M15,
-    ]
+    # NoDecode on both lists for the same reason as cors_allow_origins: a flat
+    # env var supplies a comma-separated string, not JSON.
+    assets: Annotated[list[str], NoDecode] = Field(
+        default=["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+    )
+    timeframes: Annotated[list[Timeframe], NoDecode] = Field(
+        default=[Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15]
+    )
     decision_timeframe: Timeframe = Timeframe.H4
     entry_timeframe: Timeframe = Timeframe.M15
     mode: TradingMode = Field(
@@ -201,6 +224,11 @@ class TradingConfig(EnvModel):
     minimum_confidence: float = Field(default=0.62, ge=0.0, le=1.0)
     maker_fee: float = 0.001
     taker_fee: float = 0.001
+
+    @field_validator("assets", "timeframes", mode="before")
+    @classmethod
+    def _split_csv(cls, value: object) -> object:
+        return _parse_str_list(value)
 
     @field_validator("assets")
     @classmethod
@@ -296,7 +324,9 @@ class Settings(BaseSettings):
     )
     api_host: str = Field(default="0.0.0.0", validation_alias=AliasChoices("API_HOST"))
     api_port: int = Field(default=8000, validation_alias=AliasChoices("API_PORT"))
-    cors_allow_origins: list[str] = Field(
+    # NoDecode: the env source would otherwise json.loads() this value and
+    # raise before the splitter below sees the comma-separated form.
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(
         default=["http://localhost:5173"],
         validation_alias=AliasChoices("CORS_ALLOW_ORIGINS"),
     )
@@ -317,9 +347,7 @@ class Settings(BaseSettings):
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+        return _parse_str_list(value)
 
     @property
     def is_production(self) -> bool:
