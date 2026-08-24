@@ -1,0 +1,40 @@
+# Development overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Backend runs with hot reload; the production nginx frontend is parked behind a
+# profile and replaced by Vite's dev server on port 5173.
+services:
+  backend:
+    build:
+      target: dev
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./data:/project/data
+      - ./models:/project/models
+      - ./artifacts:/project/artifacts
+      - ./logs:/project/logs
+      - ./backups:/project/backups
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: DEBUG
+
+  # Disabled in dev: the profile is not enabled by default, so this service is
+  # skipped in favour of `frontend-dev` below.
+  frontend:
+    profiles: ["prod-frontend"]
+
+  frontend-dev:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_started

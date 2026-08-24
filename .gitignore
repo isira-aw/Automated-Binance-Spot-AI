@@ -1,0 +1,44 @@
+# ---- Secrets -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets/
+
+# ---- Persistent runtime data (never version-controlled) ------------------
+data/
+models/
+artifacts/
+logs/
+backups/
+
+# ---- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ---- Node / frontend -----------------------------------------------------
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ---- Editors / OS --------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ...but keep the persistent directory skeleton itself
+!data/**/.gitkeep
+!models/**/.gitkeep
+!artifacts/**/.gitkeep
+!logs/.gitkeep
+!backups/.gitkeep

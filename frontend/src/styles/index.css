@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-950 text-slate-200 antialiased;
+    font-feature-settings: 'tnum' 1;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-surface-700 bg-surface-900;
+  }
+
+  .panel-header {
+    @apply border-b border-surface-700 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400;
+  }
+
+  .metric-label {
+    @apply text-[11px] uppercase tracking-wider text-slate-500;
+  }
+
+  .metric-value {
+    @apply font-mono text-lg text-slate-100;
+  }
+}
