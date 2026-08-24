@@ -2,6 +2,12 @@
 
 Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 1 of 20
 
+**Phase 1 is verified running on real infrastructure.** `docker compose up -d`
+brings up postgres, redis, backend and frontend; migrations apply
+(`0001_initial_schema`, 31 tables); `/api/v1/system/health` reports
+`overall: ONLINE` with every unbuilt component explicitly `NOT_IMPLEMENTED`
+and every Tier 2 component `DISABLED`.
+
 ## Completed
 
 **Phase 1 — repository structure, Docker, configuration**
@@ -87,11 +93,21 @@ the full REST contract, and the WebSocket protocol.
   trading engine.
 - Background workers and the scheduler have no services in `docker-compose.yml`
   yet — they are added when there is work for them to do.
-- Docker images have not been built in this environment (no Docker daemon was
-  available); compose files are syntax-checked, and both applications build and
-  test successfully outside containers.
+- Docker images cannot be built in the development session (no Docker daemon);
+  the stack is verified by running it on the target machine instead. Five
+  defects reached that machine because local checks never exercised a real
+  container or a real `.env`: the ORM package excluded from the image by an
+  unanchored gitignore rule, flat environment variables ignored by nested
+  settings sections, comma-separated list values rejected by the env source,
+  CRLF line endings from Windows, and healthchecks resolving `localhost` to
+  IPv6. There is still no CI running a clean checkout, so this class of bug is
+  caught only by running the stack.
 - The database integration tests need a running PostgreSQL with migrations
-  applied; they skip themselves otherwise.
+  applied; they skip themselves otherwise. The initial migration has now been
+  applied against a real PostgreSQL 16 as well as in the deployed stack.
+- `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
+  directory; changing it in `.env` afterwards causes an authentication failure
+  until the server password is changed to match (see TROUBLESHOOTING.md).
 
 ## Next phase
 
