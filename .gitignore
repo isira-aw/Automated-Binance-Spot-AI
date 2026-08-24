@@ -5,11 +5,14 @@
 secrets/
 
 # ---- Persistent runtime data (never version-controlled) ------------------
-data/
-models/
-artifacts/
-logs/
-backups/
+# Anchored to the repository root with a leading slash.  Unanchored patterns
+# match at any depth, which would also swallow source directories such as
+# backend/app/models/ (the ORM package) and keep them out of the image.
+/data/
+/models/
+/artifacts/
+/logs/
+/backups/
 
 # ---- Python --------------------------------------------------------------
 __pycache__/
@@ -37,8 +40,8 @@ frontend/.vite/
 Thumbs.db
 
 # ...but keep the persistent directory skeleton itself
-!data/**/.gitkeep
-!models/**/.gitkeep
-!artifacts/**/.gitkeep
-!logs/.gitkeep
-!backups/.gitkeep
+!/data/**/.gitkeep
+!/models/**/.gitkeep
+!/artifacts/**/.gitkeep
+!/logs/.gitkeep
+!/backups/.gitkeep
