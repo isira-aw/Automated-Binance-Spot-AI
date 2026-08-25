@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import ClassVar
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -16,6 +17,39 @@ from app.core.errors import AppError, ErrorDetail, ErrorResponse
 from app.core.logging_config import get_logger, request_id_var
 
 logger = get_logger("api.middleware")
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Baseline security response headers (§60, §99).
+
+    The API is JSON-only and serves no HTML of its own, so the goal is
+    narrow: make a browser refuse to reinterpret a response as something
+    executable, and refuse to frame it. Deliberately *not* set here:
+
+    * HSTS -- this is a local-first platform normally reached over plain
+      HTTP on localhost; sending it would poison the browser's HSTS cache
+      for that host and break the stack for the user.
+    * A restrictive CSP on API responses -- the frontend is served
+      separately by nginx, which is where a page CSP belongs.
+    """
+
+    HEADERS: ClassVar[dict[str, str]] = {
+        # Never let a browser sniff a JSON error into HTML or a script.
+        "X-Content-Type-Options": "nosniff",
+        # No page here is ever meant to be framed (clickjacking).
+        "X-Frame-Options": "DENY",
+        # Don't leak API paths (which include ids) to third parties.
+        "Referrer-Policy": "no-referrer",
+        # This API needs none of these; deny them rather than inherit
+        # whatever the browser's default happens to be.
+        "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    }
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
+        response = await call_next(request)
+        for header, value in self.HEADERS.items():
+            response.headers.setdefault(header, value)
+        return response
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):

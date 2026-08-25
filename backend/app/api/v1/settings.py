@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.deps import SettingsDep
-from app.api.v1.system import TIER1_COMPONENTS, TIER2_COMPONENTS
+from app.api.v1.system import INFLUENCING_SIGNALS, TIER1_COMPONENTS, TIER2_COMPONENTS
 from app.schemas.system import (
     RiskConfigOut,
     SettingsOut,
@@ -69,7 +69,7 @@ async def read_settings(settings: SettingsDep) -> SettingsOut:
                 "ollama": settings.llm.ollama_enabled,
                 "claude": settings.llm.claude_enabled,
             },
-            influencing_signals=[],
+            influencing_signals=INFLUENCING_SIGNALS,
         ),
     )
 

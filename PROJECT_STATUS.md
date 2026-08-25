@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 17 of 20
+Last updated: 2026-08-25 · Track: **MVP / Tier 1** · **Phase 20 of 20 — Tier 1 MVP complete**
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -55,10 +55,10 @@ and every Tier 2 component `DISABLED`.
   reconnect and heartbeat replies. `apiPost` now carries an optional JSON
   body, needed once an endpoint (`/signals/generate`, `/models/train`) takes
   parameters rather than acting on nothing.
-- Tier labelling: the UI reports which components influence an *executed*
-  trade (today: none, since nothing yet wires a signal to an order) —
-  distinct from a signal simply having been generated, which the Dashboard's
-  "Latest signals" panel and the Signals page now show happening.
+- Tier labelling: the UI distinguishes what influences a *signal* (Phase 20
+  corrected this to report technical + structure + LightGBM, which had been
+  hardcoded empty since Phase 1) from what influences an *executed trade*
+  (still nothing — no automatic signal-to-order path exists).
 - Signals page: generate a fused signal for a chosen symbol/timeframe, browse
   recent signals, and expand any row to its full component breakdown and
   reason codes — the §79/§80 decision chain made visible for the first time.
@@ -554,13 +554,118 @@ and every Tier 2 component `DISABLED`.
   generated signal's `risk_decision`/`risk_reason` columns exist in the
   schema but are left `NULL` here; nothing sets them yet.
 
-**Phase 18 (partial) — migration tooling**
+**Phase 18 — migration, backup and restore (finished)**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
-  Makefile and PowerShell wrappers.
+  Makefile and PowerShell wrappers existed from Phase 1 but had **never been
+  run end to end** — it shells out to `docker compose exec postgres pg_dump`,
+  and no development session has had a Docker daemon. "The script exists and
+  reads plausibly" is exactly the kind of untested claim this project's own
+  discipline exists to catch, so this phase actually ran it.
+- Added a **`--direct` mode** (also `MANAGE_DB_MODE=direct`) that uses local
+  `pg_dump`/`pg_restore` against `POSTGRES_HOST`/`POSTGRES_PORT` instead of
+  `docker compose exec`. Two reasons, one operational and one practical: the
+  moment you most need a restore is the moment the stack may not be up, and
+  it is what made this tooling testable without Docker. Both modes build
+  their command through one `db_command()` helper, so they cannot drift into
+  producing different backup formats.
+- **A real round-trip was verified against a live PostgreSQL 16**: seed 400
+  candles + 400 feature rows + a trained model → `backup --direct` (356 KB
+  dump + 8.5 MB of model artifacts) → `TRUNCATE` every table → `restore
+  --direct` → all row counts back, the Alembic revision intact, and — the
+  strongest check — `verify_registry_artifacts` reporting `ok` afterwards,
+  meaning the model artifact's SHA256 survived the tar round-trip. Then the
+  same again via `export` → wipe → `import` → `restore`, which is the actual
+  move-to-another-machine path.
+- **Two real bugs found and fixed by running it**, both in the class where a
+  bug is unrecoverable:
+  - A backup that failed partway left its directory behind, where
+    `list-backups` showed it as real — a corrupt backup you discover only
+    during an incident. It is now removed on failure.
+  - Nothing distinguished a complete backup from an interrupted one.
+    `MANIFEST.txt` is now written **last**, and its absence blocks a restore
+    outright, rather than restoring a truncated dump over a working database.
+  Both were verified by forcing the failure (a nonexistent database name; a
+  manifest deleted by hand), not just by reading the new code.
+- 17 unit tests covering command construction for both modes, the
+  failed-backup cleanup, the manifest-completeness guard, the confirmation
+  requirement, and the export/import round trip. `docs/MIGRATION.md` gained
+  the `--direct` documentation, the safety rules as stated guarantees, and
+  an **incident runbook** (back up the broken state first; stop the stack;
+  restore; verify health; reconcile paper positions the market moved past
+  while you were down).
+
+**Phase 19 — security hardening**
+- **Found and fixed a real secret-disclosure bug.** `SecretRedactingFilter`'s
+  docstring claimed it redacted "messages and structured metadata", but it
+  only scrubbed `record.__dict__` *keys* — and `msg`/`message` are in
+  `_RESERVED`, so message text was never touched. A driver's own connection
+  error embeds the full DSN, password included:
+  `postgresql+asyncpg://trader:PASSWORD@postgres:5432/...`. That is logged at
+  ERROR, and `WebSocketLogHandler` streams ERROR to **every connected
+  browser** — so a database outage would have broadcast the database password
+  to any open dashboard, and written it to `logs/` on disk.
+- Fixed with a `redact_text()` pass over message bodies *and* formatted
+  tracebacks (the traceback is only rendered at format time, so it needed
+  handling separately in the formatter). Deliberately conservative: it
+  redacts credentials inside `scheme://user:PASSWORD@host` and secret-looking
+  `key=value` / `"key": "value"` assignments, and leaves everything else
+  alone — the host, user and database stay visible, because an over-eager
+  redactor produces logs nobody can debug with. Args are resolved before
+  scrubbing, so a secret passed as a `%s` argument is caught too. Five
+  failing tests were written first to prove each leak path, then fixed.
+- `SecurityHeadersMiddleware`: `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a
+  `Permissions-Policy` denying geolocation/microphone/camera. Applied to
+  error responses too, which is exactly where a forgotten header matters.
+  **HSTS is deliberately not sent** — this is a local-first platform normally
+  reached over plain HTTP on localhost, and an HSTS header would poison the
+  browser's cache for that host and break the stack for the user.
+- A 15-test security suite asserting the invariants whose violation would be
+  catastrophic *and silent*, against the real application rather than by
+  reading code: no withdrawal/transfer/margin/futures endpoint is routed or
+  even referenced anywhere in `app/` (§9, §70); the settings response carries
+  presence flags rather than credentials; `.env.example` holds nothing
+  key-shaped; errors leak no traceback, path, or ORM internals; production
+  refuses wildcard CORS and disables Swagger; live trading needs a second
+  explicit switch.
+
+**Phase 20 — MVP acceptance**
+- `tests/integration/test_mvp_acceptance.py`: the "can Tier 1 ship?"
+  checklist as 13 executable assertions. Every other suite tests a
+  *component*; this one tests the **promises**, in two halves that both
+  matter — capability (candles in, a reasoned signal out; a decision chain
+  that is reproducible from stored data alone; a paper trade that persists)
+  and **restraint** (an MVP that quietly grew a withdrawal path or started
+  auto-trading would pass every component test and still be a failure).
+- Restraint assertions worth naming: a rejected risk assessment never
+  carries a usable size; the simulator re-checks and raises rather than
+  trusting its caller, so a bug upstream still cannot open a position;
+  generating a signal places **no** order (Phase 15b's manual-only boundary,
+  asserted rather than assumed); and a `Signal` never claims a
+  `risk_decision` it did not get — fusion does not consult the risk engine,
+  so that column stays `NULL` rather than defaulting to anything that reads
+  as approval.
+- **Verified the suite actually bites**, rather than passing vacuously: two
+  deliberate regressions (claiming a Tier 2 component influences signals;
+  removing the simulator's approval re-check) were each caught by the
+  matching test, then reverted.
+- **Found a real honesty bug — in the opposite direction from the usual
+  one.** `/system/tiers` and `/settings` hardcoded `influencing_signals: []`
+  with a stale "Phase 1: no component influences signals yet" comment. Signal
+  fusion has been live since Phase 13, so the system was *understating* what
+  it does. Now reports `["technical_analysis", "market_structure",
+  "lightgbm"]` from one shared constant, with a test asserting no Tier 2
+  component ever appears in it. §96's "never fake a feature" cuts both ways:
+  claiming less than you do is also a false description of the system.
+- Cleaned up 10 pre-existing lint errors in Phase 13 test files that had
+  gone unnoticed because most phases ran `ruff check app/` rather than
+  including `tests/`. `app/`, `tests/` and `scripts/` are now all clean.
 
 ## In progress
 
-Nothing. Phase 1 is complete and the stack is in a working state.
+Nothing. **Tier 1 (the MVP) is complete**: all 20 phases are built, tested,
+and verified. Tier 2 has not been started, by design — §1a requires Tier 1 to
+stand on its own first, and it now does.
 
 ## Blocked
 
@@ -570,13 +675,15 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 436 | pass |
-| Backend API + WebSocket integration | 41 | pass |
-| Backend database integration | 76 | pass (real PostgreSQL 16); skip without one |
+| Backend unit | 460 | pass |
+| Backend API + WebSocket integration | 56 | pass |
+| Backend database integration | 89 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 14 | pass |
 | Frontend E2E (Playwright) | 4 | pass, requires the stack running + e2e/seed.py |
 
-Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
+Lint: `ruff` clean across `app/`, `tests/` and `scripts/`;
+`eslint --max-warnings 0` clean; `tsc -b` clean (Phase 17 found the old
+`tsc --noEmit` script was checking zero files).
 
 Coverage highlights: UTC candle-closure rules, risk-config immutability and
 range validation, live-trading defaults, CORS policy, event-bus backpressure,
@@ -718,32 +825,54 @@ the full REST contract, and the WebSocket protocol.
   count (state that was never load-bearing: every tick rehydrates its own
   data from the database, same as every other paper-trading action).
 
-## Next phase
+## What Tier 1 does not cover
 
-**Phase 18 — finish migration/backup/restore.**
+Tier 1 is complete, which is a narrower claim than "ready to trade real
+money". Before that, three things this session could not do have to happen
+on a machine with real connectivity:
 
-`scripts/manage.py` (migrate, backup, restore, list-backups, export, import,
-verify) was written in Phase 1 and has never been exercised by any
-automated test or a real run since — it shells out to `docker compose run
---rm postgres pg_dump/pg_restore` by design (§49/§50: never trust Docker
-layer state), which this development session has never had a Docker daemon
-to run. That is the same disclosed limitation that has applied to every
-Docker-dependent claim throughout this build (Phase 1's "verified on real
-infrastructure" note exists precisely because of it) — Phase 18 finishing
-this genuinely needs a machine with Docker, i.e. the target/user machine,
-not this session.
+1. **Nothing has ever touched the live Binance API.** Every test runs against
+   a deterministic mock or a scripted transport; Binance has been unreachable
+   from every development session since Phase 5. Request/response shapes
+   follow the public documentation, but the first real handshake happens on
+   the target machine, and `/system/health` is where a mismatch will show.
+2. **No model has been trained on real market history.** Every training run
+   used synthetic data — deterministic series for plumbing correctness, or a
+   crafted momentum series to prove the pipeline can learn *something*.
+   Whether the LightGBM baseline clears its validation bars on real
+   BTC/ETH/BNB history, and what those bars should even be, is unknown until
+   a real backfill and a real training run happen.
+3. **No strategy has been validated.** Backtests have only ever run on
+   synthetic uptrends, where a high win rate means nothing. §22's experiment
+   log and §41's metric set exist for the real version of this work, which is
+   a research exercise, not a build task.
 
-1. A real backup → restore round-trip against the deployed stack: back up a
-   database with real data, restore it into a fresh instance, verify the
-   data matches — the thing `cmd_backup`/`cmd_restore` claim to do but that
-   has never actually been run end to end.
-2. `export`/`import` verified the same way across two separate machines or
-   at least two separate Docker volumes, since their whole purpose is
-   moving a backup off the machine that made it.
-3. Whatever this surfaces (a missing table in `BACKED_UP_TREES`, a
-   `pg_dump`/`pg_restore` version mismatch, a manifest that doesn't
-   actually round-trip) gets fixed before this is called done — "the
-   script exists and reads plausibly" is exactly the kind of untested claim
-   this project's own discipline exists to catch.
-4. A short operational runbook (when to back up, how to restore during an
-   incident) if the scripts' own `--help` output doesn't already cover it.
+The honest summary: the *platform* is finished and proven. The *strategy* is
+not, and nothing in this codebase claims otherwise — which is why live
+trading is off by default, needs a second explicit switch, and cannot be
+armed by any code path short of a human editing `.env`.
+
+## Suggested next steps
+
+**Operationally**, on the target machine: `docker compose up -d`, run a real
+backfill, train on real history, and let it run in paper mode long enough to
+produce a meaningful trade sample. `/system/health` and the Risk page's
+decision history are where problems will surface first.
+
+**In code**, the largest honest gaps, in the order they matter:
+
+1. **Automatic signal-to-order execution.** Deliberately unbuilt and flagged
+   since Phase 15: a live signal and a paper position are still two things a
+   person bridges by hand. That wiring needs its own explicit policy
+   decision, not a default.
+2. **Per-bar LightGBM inference for backtests.** `predict_latest` only ever
+   scores the newest bar, so backtests run technical-only and therefore do
+   not measure the same decision process a live signal uses.
+3. **Continuous mark-to-market.** The scheduler snapshots equity every 30s,
+   which bounds but does not eliminate `peak_equity` drift between ticks.
+
+**Tier 2** (patterns, regime, Transformer, news, LLM) remains unstarted by
+design. §1a is explicit that Tier 1 must stand alone first — and the
+`influencing_signals` list, the `tier2_enabled` flags, and the health
+endpoint's `DISABLED` statuses are all already wired to tell the truth about
+that the moment any of it is switched on.

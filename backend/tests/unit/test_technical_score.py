@@ -86,9 +86,9 @@ class TestConfidence:
 
     def test_confidence_is_always_in_unit_interval(self):
         for kwargs in (
-            dict(sma_20=1000, sma_50=100),  # extreme trend
-            dict(rsi_14=100),
-            dict(),
+            {"sma_20": 1000, "sma_50": 100},  # extreme trend
+            {"rsi_14": 100},
+            {},
         ):
             _, confidence, _ = compute_technical_score(features(**kwargs))
             assert 0.0 <= confidence <= 1.0
@@ -115,15 +115,20 @@ class TestStructureIntegration:
 class TestDetailsForAudit:
     def test_details_record_every_subsignal_for_the_audit_trail(self):
         _, _, details = compute_technical_score(features(sma_20=105, sma_50=100))
-        assert set(details["subsignals"]) == {"trend", "momentum", "directional_movement", "structure"}
+        assert set(details["subsignals"]) == {
+            "trend",
+            "momentum",
+            "directional_movement",
+            "structure",
+        }
         assert details["version"] == "v1"
 
     def test_score_is_always_in_unit_interval_across_extreme_inputs(self):
         for kwargs in (
-            dict(sma_20=1e9, sma_50=1),
-            dict(rsi_14=0),
-            dict(rsi_14=100),
-            dict(plus_di=1000, minus_di=0, adx=1000),
+            {"sma_20": 1e9, "sma_50": 1},
+            {"rsi_14": 0},
+            {"rsi_14": 100},
+            {"plus_di": 1000, "minus_di": 0, "adx": 1000},
         ):
             score, _, _ = compute_technical_score(features(**kwargs))
             assert 0.0 <= score <= 1.0

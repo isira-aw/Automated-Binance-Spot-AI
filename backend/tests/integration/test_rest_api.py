@@ -64,10 +64,22 @@ def test_live_trading_is_off_and_unarmed_in_the_default_configuration(client: Te
     assert trading["mode"] == "PAPER"
 
 
-def test_tier_status_reports_nothing_influencing_signals_yet(client: TestClient):
-    """§14: the UI must be able to tell shadow/research from live influence."""
+def test_tier_status_reports_what_actually_influences_a_signal(client: TestClient):
+    """§14: the UI must be able to tell shadow/research from live influence.
+
+    Was `[]` through Phase 12, when no fusion engine existed. Phase 13 made
+    technical + LightGBM real, so reporting `[]` would now understate what
+    the system does -- dishonest in the opposite direction from the usual
+    risk, and just as wrong.
+    """
     tiers = client.get("/api/v1/system/tiers").json()
-    assert tiers["influencing_signals"] == []
+    assert set(tiers["influencing_signals"]) == {
+        "technical_analysis",
+        "market_structure",
+        "lightgbm",
+    }
+    # No Tier 2 component may influence a signal (§6, §14).
+    assert not set(tiers["influencing_signals"]) & set(tiers["tier2_components"])
     assert "lightgbm" in tiers["tier1_components"]
     assert "claude" in tiers["tier2_components"]
     assert all(enabled is False for enabled in tiers["tier2_enabled"].values())
