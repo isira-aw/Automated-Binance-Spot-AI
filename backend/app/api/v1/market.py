@@ -13,6 +13,7 @@ import asyncio
 from fastapi import APIRouter, Query
 
 from app.api.v1.deps import BinanceServiceDep, SessionDep, SettingsDep
+from app.config.settings import Timeframe
 from app.core.errors import ValidationError
 from app.core.logging_config import get_logger
 from app.core.time_utils import timeframe_seconds
@@ -165,23 +166,37 @@ async def features(
     response_model=dict[str, int],
     summary="(Re)compute technical features for every configured symbol/timeframe",
 )
-async def compute_features(session: SessionDep, settings: SettingsDep) -> dict[str, int]:
+async def compute_features(
+    session: SessionDep,
+    settings: SettingsDep,
+    symbol: str | None = Query(
+        default=None, description="Restrict to a single symbol, e.g. BTCUSDT."
+    ),
+    timeframe: Timeframe | None = Query(
+        default=None, description="Restrict to a single timeframe, e.g. 4h."
+    ),
+) -> dict[str, int]:
     """Bulk-compute features over whatever history is currently stored.
 
     Runs synchronously: it is pure DB read + CPU-bound pandas computation, no
     exchange calls, so it stays fast even over a multi-year history and does
     not need the backgrounded-job treatment ``/backfill`` needs (§76).
+
+    ``symbol``/``timeframe`` optionally narrow the sweep to a single pair
+    instead of every configured symbol/timeframe.
     """
+    symbols = [symbol.upper()] if symbol else settings.trading.assets
+    timeframes = [timeframe] if timeframe else settings.trading.timeframes
     results: dict[str, int] = {}
-    for symbol in settings.trading.assets:
-        for timeframe in settings.trading.timeframes:
+    for sym in symbols:
+        for tf in timeframes:
             count = await compute_and_store_all(
                 session,
-                symbol=symbol,
-                timeframe=timeframe.value,
+                symbol=sym,
+                timeframe=tf.value,
                 feature_version=settings.models.feature_version,
             )
-            results[f"{symbol}:{timeframe.value}"] = count
+            results[f"{sym}:{tf.value}"] = count
     return results
 
 
@@ -192,20 +207,35 @@ async def compute_features(session: SessionDep, settings: SettingsDep) -> dict[s
     summary="Start backfilling configured symbols/timeframes",
 )
 async def start_backfill(
-    binance: BinanceServiceDep, settings: SettingsDep
+    binance: BinanceServiceDep,
+    settings: SettingsDep,
+    symbol: str | None = Query(
+        default=None, description="Restrict to a single symbol, e.g. BTCUSDT."
+    ),
+    timeframe: Timeframe | None = Query(
+        default=None, description="Restrict to a single timeframe, e.g. 4h."
+    ),
 ) -> BackfillJobOut:
     """Kick off a backfill in the background and return immediately (§76).
 
     Progress is polled via ``GET /market/backfill/status`` rather than
     streamed -- ingestion has no WebSocket event type of its own (§13), and
     inventing one for a single admin action is not worth the protocol churn.
+
+    ``symbol``/``timeframe`` optionally narrow the sweep to a single pair
+    instead of every configured symbol/timeframe.
     """
     tracker = get_ingestion_tracker()
     if tracker.current is not None and tracker.current.running:
         raise ValidationError("A backfill is already running.")
 
+    symbols = [symbol.upper()] if symbol else settings.trading.assets
+    timeframes = [timeframe] if timeframe else settings.trading.timeframes
+
     job = tracker.start()
-    task = asyncio.create_task(_run_backfill(binance, settings, job), name="market-backfill")
+    task = asyncio.create_task(
+        _run_backfill(binance, settings, job, symbols, timeframes), name="market-backfill"
+    )
     # A bare create_task() call is eligible for garbage collection mid-run;
     # keep a strong reference on the tracker for the task's lifetime.
     tracker.background_task = task
@@ -213,7 +243,7 @@ async def start_backfill(
     return BackfillJobOut(**job.to_dict())
 
 
-async def _run_backfill(binance, settings, job) -> None:
+async def _run_backfill(binance, settings, job, symbols, timeframes) -> None:
     """Runs outside the request lifecycle: its own session, its own errors.
 
     A failure on one symbol/timeframe must not abort the others -- partial
@@ -222,8 +252,8 @@ async def _run_backfill(binance, settings, job) -> None:
     tracker = get_ingestion_tracker()
     try:
         async with session_scope() as session:
-            for symbol in settings.trading.assets:
-                for timeframe in settings.trading.timeframes:
+            for symbol in symbols:
+                for timeframe in timeframes:
                     try:
                         result = await backfill_symbol_timeframe(
                             session,
