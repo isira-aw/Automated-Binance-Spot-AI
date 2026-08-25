@@ -4,18 +4,28 @@ import { Panel } from '@/components/ui/Panel';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { useApi } from '@/hooks/useApi';
 import { useEventStream } from '@/hooks/useEventStream';
-import type { HealthResponse, SettingsResponse, SystemStateResponse } from '@/types/api';
+import type { HealthResponse, SettingsResponse, SignalOut, SystemStateResponse } from '@/types/api';
+
+const ACTION_STYLES: Record<string, string> = {
+  BUY: 'bg-bullish/15 text-bullish border-bullish/30',
+  SELL: 'bg-bearish/15 text-bearish border-bearish/30',
+  EXIT: 'bg-caution/15 text-caution border-caution/30',
+  WAIT: 'bg-surface-800 text-slate-400 border-surface-600',
+  NO_VALID_SETUP: 'bg-surface-800 text-slate-500 border-surface-600',
+};
 
 export function Dashboard() {
   const health = useApi<HealthResponse>('/system/health', 10_000);
   const state = useApi<SystemStateResponse>('/system/state', 10_000);
   const settings = useApi<SettingsResponse>('/settings');
+  const signals = useApi<SignalOut[]>('/signals?limit=5', 15_000);
   const { status, events } = useEventStream();
 
   if (health.error) return <ErrorNotice error={health.error} />;
 
   const tiers = settings.data?.tiers;
   const influencing = tiers?.influencing_signals ?? [];
+  const recentSignals = signals.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -58,11 +68,46 @@ export function Dashboard() {
         </div>
       </Panel>
 
-      <Panel title="What is influencing decisions">
+      <Panel title="Latest signals">
+        {recentSignals.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No signals have been generated yet. See the Signals page to fuse the latest technical
+            features and, if registered, the LightGBM baseline into a decision.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {recentSignals.map((signal) => (
+              <div
+                key={signal.id}
+                className="flex items-center justify-between border-b border-surface-800 py-1.5 text-sm"
+              >
+                <span className="text-slate-300">
+                  {signal.symbol} · {signal.timeframe}
+                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-slate-500">
+                    conf {signal.confidence.toFixed(2)}
+                  </span>
+                  <span
+                    className={`inline-flex items-center rounded border px-2 py-0.5 text-[11px] font-medium ${
+                      ACTION_STYLES[signal.action] ?? ACTION_STYLES.WAIT
+                    }`}
+                  >
+                    {signal.action.replace(/_/g, ' ')}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="What is influencing live trading">
         {influencing.length === 0 ? (
           <p className="text-sm text-slate-400">
-            No component currently influences trading decisions. Signal fusion is not implemented
-            yet, so the platform produces no signals and places no orders — paper or otherwise.
+            No component currently influences an executed trade. Signal fusion (above) runs and
+            persists its decisions, but nothing yet places an order from a signal automatically —
+            the platform places no orders, paper or otherwise, until that wiring exists.
           </p>
         ) : (
           <ul className="text-sm text-slate-300">

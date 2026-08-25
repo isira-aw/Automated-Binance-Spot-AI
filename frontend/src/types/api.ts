@@ -136,3 +136,93 @@ export interface IntegrityReportEntry {
   is_clean: boolean;
   checked_at: string;
 }
+
+// --- Model registry (§39, §59) ---------------------------------------------
+
+export type ModelStatus = 'CANDIDATE' | 'VALIDATED' | 'PRODUCTION' | 'ARCHIVED' | 'REJECTED';
+
+export interface ModelVersionOut {
+  model_id: string;
+  version: string;
+  model_type: string;
+  status: ModelStatus;
+  symbol: string | null;
+  timeframe: string | null;
+  feature_version: string;
+  artifact_sha256: string | null;
+  training_data_range: Record<string, unknown> | null;
+  validation_range: Record<string, unknown> | null;
+  test_range: Record<string, unknown> | null;
+  hyperparameters: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
+  created_at: string;
+  promoted_at: string | null;
+  notes: string | null;
+}
+
+export interface TrainRequest {
+  symbol: string;
+  timeframe: string;
+}
+
+export interface TrainingOutcomeOut {
+  job_id: string;
+  status: string;
+  model_version: string | null;
+  registry_status: string | null;
+  error: string | null;
+  metrics: Record<string, unknown> | null;
+}
+
+export interface TrainingStatusOut {
+  running: boolean;
+  outcome: TrainingOutcomeOut | null;
+}
+
+// --- Signal fusion (§30, §59) -----------------------------------------------
+
+export type SignalAction = 'BUY' | 'SELL' | 'EXIT' | 'WAIT' | 'NO_VALID_SETUP';
+export type SignalComponentKind =
+  | 'TECHNICAL'
+  | 'PATTERN'
+  | 'REGIME'
+  | 'LIGHTGBM'
+  | 'TRANSFORMER'
+  | 'NEWS'
+  | 'FUNDAMENTAL'
+  | 'LOCAL_LLM'
+  | 'CLAUDE';
+
+export interface SignalComponentOut {
+  kind: SignalComponentKind;
+  score: number;
+  weight: number;
+  confidence: number | null;
+  version: string | null;
+  active: boolean;
+  details: Record<string, unknown> | null;
+}
+
+export interface SignalOut {
+  id: number;
+  symbol: string;
+  timeframe: string;
+  open_time: string;
+  generated_at: string;
+  action: SignalAction;
+  score: number;
+  confidence: number;
+  reason_codes: string[];
+  strategy_version: string;
+  fusion_method: string;
+  reference_price: number | null;
+  risk_decision: string | null;
+  risk_reason: string | null;
+  venue: string;
+  components: SignalComponentOut[];
+}
+
+export interface GenerateSignalRequest {
+  symbol: string;
+  timeframe: string;
+}
