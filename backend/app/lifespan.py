@@ -35,6 +35,7 @@ from app.ml.registry import demote_broken_production_models, verify_registry_art
 from app.models.enums import ComponentHealth
 from app.monitoring.health import ComponentStatus, init_health_service
 from app.monitoring.log_stream import WebSocketLogHandler
+from app.scheduler.service import SchedulerService
 from app.services.app_state import load_application_state, record_shutdown, record_startup
 from app.websocket.event_bus import init_event_bus
 from app.websocket.manager import init_connection_manager
@@ -86,6 +87,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logging.getLogger().removeHandler(log_handler)
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler is not None:
+            try:
+                await scheduler.stop()
+            except Exception as exc:
+                logger.warning(
+                    "Scheduler shutdown was not clean",
+                    extra={"event_type": "system_shutdown_warning"},
+                    exc_info=exc,
+                )
         try:
             async with session_scope() as session:
                 await record_shutdown(session)
@@ -175,6 +186,19 @@ async def _startup_checks(app: FastAPI, settings: Settings) -> None:
         )
 
     await _start_binance(app, settings, problems)
+    await _start_scheduler(app, settings)
+
+
+async def _start_scheduler(app: FastAPI, settings: Settings) -> None:
+    """Start the Phase 16 heartbeat that monitors open paper positions.
+
+    Started even if Binance failed to connect above: the scheduler degrades
+    gracefully per-tick (no price -> that symbol is skipped this tick, see
+    ``monitor_open_positions``) rather than needing Binance up at startup.
+    """
+    scheduler = SchedulerService(settings, lambda: getattr(app.state, "binance", None))
+    app.state.scheduler = scheduler
+    await scheduler.start()
 
 
 async def _start_binance(app: FastAPI, settings: Settings, problems: list[str]) -> None:
@@ -289,17 +313,30 @@ def _register_health_probes(app: FastAPI, settings: Settings) -> None:
         service.register("binance", binance_probe)
         service.register("market_data", market_data_probe)
 
-    for name in (
-        "trading_engine",
-        "risk_engine",
-        "technical_engine",
-        "scheduler",
-    ):
+    scheduler: SchedulerService | None = getattr(app.state, "scheduler", None)
+    if scheduler is not None:
+        service.register("scheduler", scheduler.probe)
+    else:
         service.register_static(
-            name,
-            ComponentHealth.NOT_IMPLEMENTED,
-            "Planned in the Tier 1 phase list; not built yet.",
+            "scheduler", ComponentHealth.NOT_IMPLEMENTED, "Planned in the Tier 1 phase list."
         )
+
+    # risk_engine (Phase 10) and technical_engine (Phase 7/8) are pure
+    # computation over already-checked dependencies (DB, config) -- no
+    # separate external connection of their own to probe, so a static
+    # ONLINE is accurate rather than a placeholder that predates them.
+    service.register_static("risk_engine", ComponentHealth.ONLINE, "Phase 10 risk engine.")
+    service.register_static(
+        "technical_engine", ComponentHealth.ONLINE, "Phase 7/8 technical + structure engines."
+    )
+
+    # No automated order placement exists yet (Phase 15b is manual-only) --
+    # this one is still honestly not built.
+    service.register_static(
+        "trading_engine",
+        ComponentHealth.NOT_IMPLEMENTED,
+        "No automated signal-to-order execution exists yet (manual only, Phase 15b).",
+    )
 
     service.register_static(
         "ollama",

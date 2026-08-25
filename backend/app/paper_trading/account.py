@@ -36,6 +36,7 @@ from app.core.logging_config import get_logger
 from app.core.time_utils import utc_now
 from app.models.enums import OrderSide, OrderStatus, OrderType, PositionStatus
 from app.models.trading import PaperOrder, PaperPosition, PortfolioSnapshot, Trade
+from app.paper_trading.fills import exit_reason_for_bar, update_trailing_stop
 from app.paper_trading.portfolio import ClosedTrade, OpenPosition, Portfolio
 from app.paper_trading.simulator import PaperTradingEngine, SimulatorConfig
 from app.risk.engine import RiskEngine, SystemState
@@ -324,7 +325,16 @@ async def close_paper_trade(
     *,
     symbol: str,
     reason: str = "MANUAL_EXIT",
+    reference_price: Decimal | None = None,
 ) -> PaperPosition:
+    """Close an open paper position.
+
+    ``reference_price`` defaults to a fresh live ticker (the manual-close
+    path). The scheduler's stop/target monitor passes the exact trigger
+    price instead -- an exit fills at the stop/target price, not whatever
+    the ticker happens to read a moment later, same principle as
+    ``PaperTradingEngine.process_bar`` uses for a backtest.
+    """
     open_row = (
         await session.execute(
             select(PaperPosition).where(
@@ -336,7 +346,8 @@ async def close_paper_trade(
         raise ValidationError(f"No open paper position in {symbol}.")
 
     portfolio = await load_portfolio(session, settings)
-    reference_price = await _reference_price(binance_service, symbol)
+    if reference_price is None:
+        reference_price = await _reference_price(binance_service, symbol)
     filters, _filters_source = resolve_symbol_filters(binance_service, symbol)
     engine = _build_engine(portfolio, settings)
     now = utc_now()
@@ -410,3 +421,88 @@ async def close_paper_trade(
         },
     )
     return open_row
+
+
+async def monitor_open_positions(
+    session: AsyncSession, settings: Settings, binance_service: BinanceService | None
+) -> int:
+    """One scheduler tick (§16 Phase 16): check every open position's stop,
+    target and trailing stop against a live price, and mark the account to
+    market.
+
+    A manually-placed paper trade previously only had its stop/target
+    checked at the moment someone called ``close`` -- everything in between
+    was invisible to the system. This is that continuous check,
+    ``PaperTradingEngine.process_bar``'s per-candle logic adapted to a
+    per-tick live price instead of a closed OHLC bar (``high=low=price``
+    reduces ``exit_reason_for_bar`` to exactly the live-price comparison
+    that needs, with no separate implementation).
+
+    Returns the number of positions closed this tick. Never raises for a
+    single symbol's price fetch failing -- one stale/unreachable symbol
+    must not stop the rest of the book from being monitored (§44).
+    """
+    if binance_service is None:
+        return 0
+
+    open_rows = await _load_open_position_rows(session)
+    if not open_rows:
+        return 0
+
+    prices: dict[str, Decimal] = {}
+    closed_count = 0
+    for row in open_rows:
+        try:
+            ticker = await binance_service.ticker(row.symbol)
+        except Exception as exc:
+            logger.warning(
+                "Could not fetch a price to monitor an open position",
+                extra={"event_type": "scheduler_price_unavailable", "symbol": row.symbol},
+                exc_info=exc,
+            )
+            continue
+        price = ticker.price
+        prices[row.symbol] = price
+
+        stop_loss = Decimal(str(row.stop_loss)) if row.stop_loss is not None else None
+        take_profit = Decimal(str(row.take_profit)) if row.take_profit is not None else None
+        reason = exit_reason_for_bar(
+            high=price, low=price, stop_loss=stop_loss, take_profit=take_profit
+        )
+        if reason is not None:
+            trigger_price = stop_loss if reason == "STOP_LOSS" else take_profit
+            assert trigger_price is not None  # exit_reason_for_bar only fires when set
+            try:
+                await close_paper_trade(
+                    session,
+                    settings,
+                    binance_service,
+                    symbol=row.symbol,
+                    reason=reason,
+                    reference_price=trigger_price,
+                )
+                closed_count += 1
+            except ValidationError:
+                # Already closed by a concurrent action between the load and here.
+                continue
+            continue
+
+        trailing_distance = (
+            Decimal(str(row.trailing_stop)) if row.trailing_stop is not None else None
+        )
+        if trailing_distance is not None and trailing_distance > 0:
+            new_stop = update_trailing_stop(
+                current_stop=stop_loss, high=price, trailing_distance=trailing_distance
+            )
+            if new_stop is not None and (stop_loss is None or new_stop > stop_loss):
+                row.stop_loss = new_stop
+                session.add(row)
+
+    await session.commit()
+
+    if prices:
+        portfolio = await load_portfolio(session, settings)
+        await _record_snapshot(session, portfolio, prices)
+        await session.commit()
+
+    return closed_count
