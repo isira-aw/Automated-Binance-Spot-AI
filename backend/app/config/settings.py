@@ -289,6 +289,16 @@ class BacktestConfig(BaseModel):
     max_bars: int = Field(default=5000, ge=1)
 
 
+class SchedulerConfig(BaseModel):
+    """Phase 16: the unattended loop that monitors open paper positions
+    between manual actions. Not a claim ``interval_seconds`` is tuned --
+    a documented starting point, same as elsewhere in this file.
+    """
+
+    enabled: bool = True
+    interval_seconds: int = Field(default=30, ge=1)
+
+
 class ModelsConfig(BaseModel):
     """Tier 1 is LightGBM only; Transformer/ensemble are Tier 2 (§1a, §25)."""
 
@@ -408,6 +418,7 @@ class Settings(BaseSettings):
     risk: RiskConfig = RiskConfig()
     paper_trading: PaperTradingConfig = PaperTradingConfig()
     backtesting: BacktestConfig = BacktestConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
     models: ModelsConfig = ModelsConfig()
     llm: LLMConfig = Field(default_factory=LLMConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)

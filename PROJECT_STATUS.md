@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 15b of 20
+Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 16 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -173,6 +173,68 @@ and every Tier 2 component `DISABLED`.
   Phase 5, so a full live fill could not be exercised end-to-end here).
   Full backend suite: 535 passing (427 unit / 41 API+WS / 67 DB
   integration).
+
+**Phase 16 — system monitoring and the scheduler**
+- `app/scheduler/service.py` (new): the unattended heartbeat the health
+  endpoint has reported `NOT_IMPLEMENTED` for since Phase 3. A small,
+  explicit `asyncio` task -- not a new scheduling framework -- since one
+  periodic job is what exists to run. Started and stopped from
+  `app/lifespan.py` alongside every other component, and started even if
+  Binance failed to connect at startup: it degrades gracefully per tick
+  rather than needing Binance up front.
+- Its one job so far: `monitor_open_positions` (`app/paper_trading/
+  account.py`), the continuous check a manually-placed paper position
+  never had before this phase. Previously a stop-loss, take-profit, or
+  trailing stop on an open paper position was only ever evaluated at the
+  moment someone called `close` -- everything between two manual actions
+  was invisible to the system. Each tick fetches a live price per open
+  symbol and reuses `exit_reason_for_bar`/`update_trailing_stop` from
+  Phase 11's fills module directly (`high=low=price` correctly reduces the
+  OHLC-bar check to a live-price comparison, no separate implementation),
+  closing at the exact stop/target price if triggered -- same principle as
+  a backtest, an exit fills at the trigger price, not whatever the ticker
+  reads a moment later. `close_paper_trade` gained an optional
+  `reference_price` override for this; the manual API path is unaffected
+  (still fetches a fresh live price by default).
+- Every tick also marks the account to market and writes a
+  `portfolio_snapshots` row when at least one position could be priced,
+  directly improving Phase 15b's disclosed `peak_equity` approximation
+  (more snapshot events between manual actions means less under-counted
+  drawdown headroom).
+- A single symbol's price fetch failing degrades that symbol only (logged,
+  skipped) -- it does not stop the rest of the open book from being
+  monitored, and a whole tick failing does not stop the loop, matching the
+  "a failure here must not stop the stream" principle the market-data
+  bridge already used (§44).
+- `/system/health`'s `scheduler` entry is now a real probe (`ONLINE` with
+  tick count / last-tick timestamp, `DEGRADED` with the last tick's error,
+  `OFFLINE` if stopped, `DISABLED` if configured off) instead of the
+  `NOT_IMPLEMENTED` placeholder. While making this accurate, also fixed
+  `risk_engine` and `technical_engine`, which had been reporting
+  `NOT_IMPLEMENTED` since Phase 3 despite Phase 7/8/10 actually building
+  them -- both are pure computation over already-checked dependencies, so a
+  static `ONLINE` is correct. `trading_engine` stays `NOT_IMPLEMENTED`,
+  correctly: no automated signal-to-order execution exists (Phase 15b is
+  manual-only).
+- No frontend change was needed: the Dashboard/System pages already render
+  `health.components` generically from whatever the API returns, so the
+  new `scheduler`/`risk_engine`/`technical_engine` statuses show up without
+  any page-specific code.
+- Verified three ways: 8 new DB integration tests for `monitor_open_positions`
+  (stop/target triggers fill at the exact trigger price with slippage
+  applied, trailing stop ratchets and never lowers, one symbol's price
+  failure doesn't block others, a snapshot is written, a position closed
+  between ticks is a clean no-op); 9 new unit tests for `SchedulerService`
+  itself (start/stop lifecycle, a failing tick doesn't stop the loop and
+  clears on the next success, all four health states) using a monkeypatched
+  `session_scope`/`monitor_open_positions` rather than a real database,
+  since the loop's own bookkeeping is what's under test there; and a live
+  backend session confirming `scheduler` actually reports `ONLINE` with an
+  incrementing `tick_count` at the configured 30s interval against the real
+  database, with zero open positions to monitor (a real fill still can't be
+  exercised, per the Phase 5 Binance-connectivity limitation noted
+  throughout). Full backend suite: 552 passing (436 unit / 41 API+WS / 75
+  DB integration).
 
 **Phase 5 — Binance market-data connector**
 - `BinanceService` over a REST client, WebSocket stream client, market-data
@@ -458,9 +520,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 427 | pass |
+| Backend unit | 436 | pass |
 | Backend API + WebSocket integration | 41 | pass |
-| Backend database integration | 67 | pass (real PostgreSQL 16); skip without one |
+| Backend database integration | 75 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 14 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
@@ -562,14 +624,16 @@ the full REST contract, and the WebSocket protocol.
   boundary this phase made explicit rather than defaulting into silently.
   A live signal and a paper position are still two disconnected things a
   person has to bridge by hand.
-- Paper trading's `peak_equity` (the drawdown halt's input) is
-  reconstructed only from equity recorded at past open/close actions
-  (`portfolio_snapshots`), not from continuous mark-to-market — there is no
-  scheduler yet to mark open positions between actions. This under-counts
-  any intrabar peak between two actions, meaning real drawdown can be
-  under-reported and the halt can trip later than it ideally would. A
-  continuous pricing loop (Phase 16-ish, "system monitoring"/scheduler
-  territory) is what closes this gap properly.
+- Paper trading's `peak_equity` (the drawdown halt's input) is still an
+  approximation, improved but not eliminated by Phase 16: the scheduler
+  now marks positions to market and snapshots equity every 30 seconds
+  (configurable, `scheduler.interval_seconds`) rather than only at manual
+  open/close, but a true peak between two ticks — a spike and reversal
+  entirely inside that window — is still invisible. The error direction is
+  still the safe one for a drawdown halt (under-reporting the peak
+  under-reports drawdown, it never overstates safety), and the window is
+  now bounded by the tick interval instead of by how often a person happens
+  to act.
 - Paper trading has never been exercised against a live Binance price feed
   from this environment (same limitation noted for the Binance connector
   since Phase 5) — `open_paper_trade`/`close_paper_trade`'s correctness is
@@ -590,35 +654,42 @@ the full REST contract, and the WebSocket protocol.
   it can process thousands of bars) and bounded by `max_bars` (default
   5000) rather than backgrounded with a status-poll pattern; a range over
   the cap is rejected rather than silently truncated or left to time out.
+- The scheduler's only job is monitoring existing open positions — it does
+  not compute technical features on a timer (that stays event-driven off
+  the live candle stream, Phase 5/8, unchanged) and it does not turn a
+  generated `Signal` into a new order. Automatic signal-to-order execution
+  is still the open policy decision flagged since Phase 15 and deliberately
+  left unmade; the scheduler's existence doesn't answer it, it just gives a
+  future answer somewhere to run.
+- The scheduler is a single `asyncio` task on a fixed interval, not a
+  distributed or persistent job queue — if the backend process restarts,
+  the loop restarts from tick 1 with no memory of the previous run's tick
+  count (state that was never load-bearing: every tick rehydrates its own
+  data from the database, same as every other paper-trading action).
 
 ## Next phase
 
-**Phase 16 — system monitoring and the scheduler.**
+**Phase 17 — end-to-end testing.**
 
-Every Tier 1 decision-making piece now exists and is reachable: market data
-→ features → structure → LightGBM → fused signal (Phase 13), and a person
-can act on one manually through the risk engine into a real paper position
-(Phase 15b). Nothing yet runs any of this on its own — there is no
-scheduler, and no continuous loop marking open positions to market. Phase
-16 is that missing heartbeat, not a new decision-making capability.
+Every Tier 1 piece now exists individually, tested at the unit and DB
+integration layer: market data → features → structure → LightGBM → fused
+signal (Phase 13), risk-gated manual paper execution (Phase 15b), and an
+unattended loop keeping positions monitored between actions (Phase 16).
+None of it has been tested as one continuous path — seed candles, compute
+features, generate a signal, place a paper trade from it by hand, let the
+scheduler carry it to a stop/target exit, and check the resulting `Trade`
+and metrics are what the chain of individual pieces should produce.
 
-1. A scheduler that periodically (a) computes technical features for new
-   closed candles arriving on the live stream (Phase 5/8's wiring already
-   exists per-candle; this is the box that keeps it running unattended),
-   (b) marks open paper positions to market and writes a
-   `portfolio_snapshots` row so `peak_equity`/drawdown stop being an
-   approximation reconstructed only from open/close events (Phase 15b's
-   disclosed limitation), and (c) checks `process_bar`-style stop/target/
-   trailing-stop exits on open positions between manual actions — right now
-   a stop-loss on an open paper position only gets checked at the moment
-   someone calls `close`, not continuously.
-2. Whether a live-generated `Signal` becomes an order automatically, and
-   under what policy, is still the open decision Phase 15 flagged and
-   Phase 15b deliberately left unmade — Phase 16's scheduler is the natural
-   place that decision gets implemented, once it exists, but making it is
-   not automatic just because the heartbeat exists.
-3. System monitoring surfaces: the `/system/health` component list has
-   tracked "not implemented" placeholders for `scheduler` since Phase 3;
-   this is where that becomes real, plus whatever operational visibility
-   (last-tick freshness, missed-cycle detection) a person needs to trust an
-   unattended loop is actually running.
+1. A true end-to-end test (or a small suite of them) exercising that full
+   chain against a real database, asserting on the final state rather than
+   any one component's isolated behaviour — the kind of test that would
+   have caught a units mismatch or a sign error between two correctly-unit-
+   tested pieces that nonetheless disagree at their seam.
+2. Frontend E2E: a browser-driven pass (Playwright, matching what this
+   session already used for manual verification) covering the same chain
+   through the actual UI — Signals → Positions → Trades — codified as a
+   repeatable test rather than a one-off manual session.
+3. Whatever this surfaces about the seams between phases (naming
+   mismatches, an assumption one phase made that the next didn't share) is
+   the actual point of this phase — Phase 17 is a correctness pass across
+   the whole system, not new capability.
