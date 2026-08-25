@@ -7,6 +7,19 @@ PowerShell wrappers.
 
 Backups never rely on Docker layer state: the database is dumped with `pg_dump`
 and the persistent directories are archived from the host filesystem.
+
+Two ways to reach PostgreSQL, because the moment you most need a restore is
+the moment the stack may not be up:
+
+* **docker** (default) — `docker compose exec postgres pg_dump`, using the
+  running stack's own client binaries, so the client version always matches
+  the server.
+* **direct** (``--direct``, or ``MANAGE_DB_MODE=direct``) — local `pg_dump` /
+  `pg_restore` against ``POSTGRES_HOST``/``POSTGRES_PORT``. Needed to restore
+  onto a machine where the stack is down or Docker is unavailable, and it is
+  what lets this tooling be tested without a Docker daemon. The local client
+  must be at least the server's major version; `pg_dump` says so plainly if
+  it is not, and that error is passed straight through rather than masked.
 """
 
 from __future__ import annotations
@@ -42,6 +55,32 @@ def env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def direct_mode(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "direct", False)) or env("MANAGE_DB_MODE", "docker") == "direct"
+
+
+def db_command(args: argparse.Namespace, tool: str, *tool_args: str) -> list[str]:
+    """Build a `pg_dump`/`pg_restore` invocation for the selected mode.
+
+    The two forms take the same flags; only how the binary is reached differs.
+    Keeping that difference in one place is what stops the docker and direct
+    paths from drifting into two subtly different backup formats.
+    """
+    common = [
+        "-U", env("POSTGRES_USER", "trader"),
+        "-d", env("POSTGRES_DB", "binance_spot_ai"),
+        *tool_args,
+    ]
+    if direct_mode(args):
+        return [
+            tool,
+            "-h", env("POSTGRES_HOST", "localhost"),
+            "-p", env("POSTGRES_PORT", "5432"),
+            *common,
+        ]
+    return compose("exec", "-T", "postgres", tool, *common)
+
+
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
@@ -61,27 +100,40 @@ def cmd_backup(args: argparse.Namespace) -> int:
         return 1
     staging.mkdir(parents=True)
 
-    print("Dumping PostgreSQL...")
-    dump_path = staging / DB_DUMP_NAME
-    with dump_path.open("wb") as handle:
-        run(
-            compose(
-                "exec", "-T", "postgres",
-                "pg_dump", "-U", env("POSTGRES_USER", "trader"),
-                "-d", env("POSTGRES_DB", "binance_spot_ai"),
-                "--format=custom", "--no-owner",
-            ),
-            stdout=handle,
-        )
+    # A backup that fails partway must not be left behind looking like a
+    # usable one: `list-backups` would show it, and a restore from it would
+    # fail at the worst possible moment. Clean up and let the error surface.
+    try:
+        print("Dumping PostgreSQL...")
+        dump_path = staging / DB_DUMP_NAME
+        with dump_path.open("wb") as handle:
+            run(
+                db_command(args, "pg_dump", "--format=custom", "--no-owner"),
+                stdout=handle,
+            )
 
-    for tree in BACKED_UP_TREES:
-        source = ROOT / tree
-        if not source.exists():
-            continue
-        print(f"Archiving {tree}/ ...")
-        with tarfile.open(staging / f"{tree}.tar.gz", "w:gz") as archive:
-            archive.add(source, arcname=tree)
+        for tree in BACKED_UP_TREES:
+            source = ROOT / tree
+            if not source.exists():
+                continue
+            print(f"Archiving {tree}/ ...")
+            with tarfile.open(staging / f"{tree}.tar.gz", "w:gz") as archive:
+                archive.add(source, arcname=tree)
 
+        _write_manifest(staging, name)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        print(f"\nBackup '{name}' failed; the partial directory was removed.", file=sys.stderr)
+        raise
+
+    print(f"\nBackup complete: {staging}")
+    return 0
+
+
+def _write_manifest(staging: Path, name: str) -> None:
+    """Written last by cmd_backup, on purpose: the manifest's presence is what
+    marks a backup as complete, so an interrupted run can never leave one that
+    reads as finished."""
     (staging / MANIFEST_NAME).write_text(
         "\n".join(
             [
@@ -95,8 +147,6 @@ def cmd_backup(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\nBackup complete: {staging}")
-    return 0
 
 
 def cmd_restore(args: argparse.Namespace) -> int:
@@ -110,6 +160,17 @@ def cmd_restore(args: argparse.Namespace) -> int:
         print(f"Backup is missing {DB_DUMP_NAME}.", file=sys.stderr)
         return 1
 
+    # The manifest is written last by cmd_backup, so its absence means that
+    # backup never finished -- restoring from it would restore a truncated
+    # dump. Refuse rather than half-restore over a working database.
+    if not (staging / MANIFEST_NAME).is_file():
+        print(
+            f"Backup '{args.name}' has no {MANIFEST_NAME}, so it never completed. "
+            "Refusing to restore from it.",
+            file=sys.stderr,
+        )
+        return 1
+
     if not args.yes:
         print(
             "This overwrites the current database and the models/, artifacts/ and\n"
@@ -120,12 +181,7 @@ def cmd_restore(args: argparse.Namespace) -> int:
     print("Restoring PostgreSQL...")
     with dump_path.open("rb") as handle:
         run(
-            compose(
-                "exec", "-T", "postgres",
-                "pg_restore", "-U", env("POSTGRES_USER", "trader"),
-                "-d", env("POSTGRES_DB", "binance_spot_ai"),
-                "--clean", "--if-exists", "--no-owner",
-            ),
+            db_command(args, "pg_restore", "--clean", "--if-exists", "--no-owner"),
             stdin=handle,
         )
 
@@ -221,13 +277,20 @@ def main() -> int:
 
     subparsers.add_parser("migrate", help="apply Alembic migrations").set_defaults(func=cmd_migrate)
 
+    direct_help = (
+        "use local pg_dump/pg_restore against POSTGRES_HOST/POSTGRES_PORT "
+        "instead of `docker compose exec` (for when the stack is down)"
+    )
+
     backup = subparsers.add_parser("backup", help="create a manual backup")
     backup.add_argument("--name", help="backup name (default: timestamped)")
+    backup.add_argument("--direct", action="store_true", help=direct_help)
     backup.set_defaults(func=cmd_backup)
 
     restore = subparsers.add_parser("restore", help="restore a backup")
     restore.add_argument("--name", required=True)
     restore.add_argument("--yes", action="store_true", help="confirm the overwrite")
+    restore.add_argument("--direct", action="store_true", help=direct_help)
     restore.set_defaults(func=cmd_restore)
 
     subparsers.add_parser("list-backups", help="list backups").set_defaults(func=cmd_list)
@@ -241,7 +304,9 @@ def main() -> int:
     imp.add_argument("archive")
     imp.set_defaults(func=cmd_import)
 
-    subparsers.add_parser("verify", help="check persistent directories").set_defaults(func=cmd_verify)
+    subparsers.add_parser("verify", help="check persistent directories").set_defaults(
+        func=cmd_verify
+    )
 
     args = parser.parse_args()
     try:

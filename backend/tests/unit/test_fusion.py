@@ -91,7 +91,10 @@ class TestWeightedCombination:
         bullish technical read toward the middle -- it should be renormalised
         away, since 'no opinion' is not the same as 'a neutral opinion'."""
         without_lgbm = fuse(
-            [component(TECH, score=0.9, weight=0.4), component(LGBM, score=0.5, weight=0.6, active=False)],
+            [
+                component(TECH, score=0.9, weight=0.4),
+                component(LGBM, score=0.5, weight=0.6, active=False),
+            ],
             min_confidence=0.0, action_margin=0.0,
         )
         assert without_lgbm.score == pytest.approx(0.9)
@@ -110,7 +113,10 @@ class TestWeightedCombination:
 class TestReasonCodes:
     def test_reason_codes_name_each_active_components_lean(self):
         result = fuse(
-            [component(TECH, score=0.9, confidence=1.0), component(LGBM, score=0.1, confidence=1.0)],
+            [
+                component(TECH, score=0.9, confidence=1.0),
+                component(LGBM, score=0.1, confidence=1.0),
+            ],
             min_confidence=0.0, action_margin=0.0,
         )
         assert "COMPONENT_TECHNICAL_BULLISH" in result.reason_codes

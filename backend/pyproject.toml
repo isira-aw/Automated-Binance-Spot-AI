@@ -25,6 +25,11 @@ ignore = ["B008", "RUF001", "RUF002", "RUF003"]
 [tool.ruff.lint.per-file-ignores]
 "app/migrations/versions/*" = ["E501"]
 "tests/*" = ["S101"]
+# scripts/manage.py runs standalone with whatever system Python the user has
+# (the Makefile and PowerShell wrappers do not activate a venv), so it cannot
+# use 3.11-only spellings the backend is free to use. UP017 would rewrite
+# `timezone.utc` to `datetime.UTC`, which does not exist before 3.11.
+"../scripts/*" = ["UP017"]
 
 [tool.mypy]
 python_version = "3.11"

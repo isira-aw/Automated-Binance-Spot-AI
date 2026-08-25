@@ -9,7 +9,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.middleware import RequestContextMiddleware, register_exception_handlers
+from app.api.middleware import (
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+    register_exception_handlers,
+)
 from app.api.v1.router import api_router
 from app.api.v1.websocket import router as websocket_router
 from app.config import Settings, get_settings
@@ -53,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expose_headers=["x-request-id"],
     )
     app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     register_exception_handlers(app)
 

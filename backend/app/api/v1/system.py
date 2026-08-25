@@ -35,6 +35,19 @@ TIER2_COMPONENTS = [
     "claude",
 ]
 
+# Components that actually feed a generated signal today (§14).
+#
+# Kept accurate in both directions: it was `[]` through Phase 12 because no
+# fusion engine existed, and understating it now that Phase 13 fuses these
+# two would be its own kind of dishonesty. Every entry here must correspond
+# to a `SignalComponent` row a real signal carries -- see
+# `app/signals/service.py`, which builds exactly these two.
+#
+# Note what this does *not* claim: a signal influencing a *trade*. Nothing
+# executes automatically (Phase 15b is manual-only), which the health
+# endpoint reports separately as `trading_engine: NOT_IMPLEMENTED`.
+INFLUENCING_SIGNALS = ["technical_analysis", "market_structure", "lightgbm"]
+
 
 @router.get("/health", response_model=HealthOut, summary="Component health")
 async def health(service: HealthDep, response: Response) -> HealthOut:
@@ -104,9 +117,7 @@ async def tiers(settings: SettingsDep) -> TierStatusOut:
         tier1_components=TIER1_COMPONENTS,
         tier2_components=TIER2_COMPONENTS,
         tier2_enabled=enabled,
-        # Phase 1: no component influences signals yet — the signal fusion
-        # engine is not built.  This list grows as Tier 1 phases land.
-        influencing_signals=[],
+        influencing_signals=INFLUENCING_SIGNALS,
     )
 
 
