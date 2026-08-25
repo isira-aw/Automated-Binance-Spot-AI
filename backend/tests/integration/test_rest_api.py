@@ -74,11 +74,11 @@ def test_tier_status_reports_nothing_influencing_signals_yet(client: TestClient)
 
 
 def test_unbuilt_namespaces_return_the_not_implemented_envelope(client: TestClient):
-    response = client.get("/api/v1/orders")
+    response = client.get("/api/v1/binance")
     assert response.status_code == 501
     error = response.json()["error"]
     assert error["code"] == "NOT_IMPLEMENTED"
-    assert error["metadata"]["namespace"] == "orders"
+    assert error["metadata"]["namespace"] == "binance"
 
 
 def test_every_documented_namespace_exists_in_the_api(client: TestClient):

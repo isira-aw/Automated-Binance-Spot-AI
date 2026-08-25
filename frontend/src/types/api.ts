@@ -330,3 +330,73 @@ export interface BacktestRunSummaryOut {
   metrics: Record<string, unknown> | null;
   created_at: string;
 }
+
+// --- Paper trading execution (§11B, §31, §41, §59) --------------------------
+
+export interface OpenOrderRequest {
+  symbol: string;
+  stop_price: number;
+  take_profit?: number;
+  trailing_distance?: number;
+  signal_id?: number;
+}
+
+export interface PaperOrderOut {
+  id: number;
+  client_order_id: string;
+  signal_id: number | null;
+  symbol: string;
+  side: string;
+  order_type: string;
+  status: string;
+  quantity: number;
+  price: number | null;
+  filled_quantity: number;
+  average_fill_price: number | null;
+  fee: number;
+  submitted_at: string;
+  strategy_version: string | null;
+}
+
+export interface PaperPositionOut {
+  id: number;
+  symbol: string;
+  status: string;
+  quantity: number;
+  entry_price: number;
+  entry_time: string;
+  exit_price: number | null;
+  exit_time: string | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  trailing_stop: number | null;
+  unrealised_pnl: number | null;
+  realised_pnl: number | null;
+  fees_paid: number;
+  signal_id: number | null;
+  strategy_version: string | null;
+}
+
+export interface TradeOut {
+  id: number;
+  venue: string;
+  symbol: string;
+  position_id: number | null;
+  signal_id: number | null;
+  side: string;
+  quantity: number;
+  entry_price: number;
+  exit_price: number;
+  entry_time: string;
+  exit_time: string;
+  gross_pnl: number;
+  fees: number;
+  slippage_cost: number;
+  net_pnl: number;
+  return_pct: number;
+  mae: number | null;
+  mfe: number | null;
+  exit_reason: string | null;
+  strategy_version: string | null;
+  model_version: string | null;
+}

@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 15 of 20
+Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 15b of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -121,6 +121,58 @@ and every Tier 2 component `DISABLED`.
   make sense for the input (high win rate on a low-noise uptrend, not a
   red flag). 6 new DB integration tests for the service; 526 backend tests
   total, all passing.
+
+**Phase 15b — paper trading execution API**
+- `app/paper_trading/account.py` (new): the execution entrypoint Phase 11
+  never built. Wraps the existing `PaperTradingEngine`/`Portfolio` (no
+  reimplementation) with a persistence layer either side of every action --
+  rehydrate current state from the database, run the real engine, persist
+  what it did. Manual entry only, a deliberate scope boundary stated in the
+  module's own docstring: nothing here is triggered automatically by a
+  generated `Signal`.
+- The rehydration is the hard part, and the one this phase's tests target
+  directly: `quote_balance`/`realised_pnl`/`total_fees` are *derived* from
+  the `trades` ledger and currently-open `paper_positions` rows every time,
+  never read from a separately stored balance that could drift from its own
+  history (same trade-off the `xmax` upsert trick and health aggregation
+  make elsewhere). Critically, the risk engine's per-symbol cooldown and
+  consecutive-loss-streak protections are *also* rehydrated from the same
+  ledger before every new evaluation -- without that, both protections would
+  silently reset on every separate API call, since each one builds a brand
+  new in-memory `PaperTradingEngine` from scratch. Two of the nine new DB
+  integration tests exist specifically to prove this: opening, closing, and
+  immediately reopening the same symbol across three separate calls still
+  trips the cooldown; two losing trades closed across separate calls still
+  trip the loss-streak halt on a third attempt.
+- `peak_equity` (needed for the drawdown halt) is the one honestly
+  approximate part: without a continuous mark-to-market loop (no scheduler
+  exists yet), it can only be reconstructed from equity recorded at past
+  actions (a new use of the Phase 2 `portfolio_snapshots` table, written on
+  every open/close), which under-counts any intrabar peak between two
+  actions. Documented below, not hidden -- and the error direction is the
+  wrong one for a safety feature (a peak that's actually higher than
+  reconstructed means real drawdown is under-reported).
+- `app/binance/filters.py` (new): the exchange-filter fallback logic
+  extracted out of Phase 15's `backtesting/service.py` so paper trading
+  reuses it rather than a second copy -- live-cached metadata when
+  available, otherwise "no constraint", disclosed either way.
+- `orders`/`positions`/`trades` API un-pended: `GET`/`POST /orders`,
+  `GET /positions`, `POST /positions/{symbol}/close`, `GET /trades`. A risk
+  rejection on `POST /orders` returns 409 with the engine's rule and reason
+  (also persisted to `risk_events`, visible at `GET /risk/events`) rather
+  than a 200 wrapping a failure.
+- PositionsPage (place/close a paper trade), OrdersPage (fill history), and
+  TradesPage (closed ledger) — `orders`/`positions`/`trades` finally have
+  real pages instead of `PENDING_PAGES` placeholders.
+- Verified two ways: 9 new DB integration tests against real PostgreSQL
+  covering open/close/rehydration/cooldown/loss-streak/rejection (the
+  correctness-critical part), and a live backend + browser session
+  confirming the full request path -- routes, empty states, and a Binance-
+  unreachable error propagating cleanly to the UI without a crash (Binance
+  itself is unreachable from this session, same limitation noted since
+  Phase 5, so a full live fill could not be exercised end-to-end here).
+  Full backend suite: 535 passing (427 unit / 41 API+WS / 67 DB
+  integration).
 
 **Phase 5 — Binance market-data connector**
 - `BinanceService` over a REST client, WebSocket stream client, market-data
@@ -408,7 +460,7 @@ Nothing.
 | --- | --- | --- |
 | Backend unit | 427 | pass |
 | Backend API + WebSocket integration | 41 | pass |
-| Backend database integration | 58 | pass (real PostgreSQL 16); skip without one |
+| Backend database integration | 67 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 14 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
@@ -503,16 +555,27 @@ the full REST contract, and the WebSocket protocol.
   LightGBM model trained on synthetic data, same as Phase 9 — the fused
   score's real-world behaviour on BTC/ETH/BNB history is unknown until a
   real backfill, real feature computation, and a real training run precede it.
-- **Paper trading has no execution entrypoint.** `PaperOrder`, `PaperPosition`
-  and `Trade` (Phase 2 schema) have no code path that has ever written a row
-  to them. `app/paper_trading/simulator.py` (Phase 11) is a pure in-memory
-  library — real, tested, and reused as-is by both live backtesting (Phase
-  12) and this phase's Backtesting API — but nothing calls it outside a
-  backtest run. There is currently no way, manual or automatic, to open a
-  paper position against live/persisted state. `orders`/`positions`/`trades`
-  stay in the frontend's `PENDING_PAGES`, now correctly attributed to a
-  not-yet-built "Phase 15b" rather than to Phase 11 (which is complete for
-  what it actually is: a simulation engine, not an execution service).
+- **Paper trading execution is manual only.** Phase 15b built the
+  entrypoint (`app/paper_trading/account.py`) and the `orders`/
+  `positions`/`trades` API/UI, but nothing places a paper trade
+  automatically from a generated `Signal` — that was a deliberate scope
+  boundary this phase made explicit rather than defaulting into silently.
+  A live signal and a paper position are still two disconnected things a
+  person has to bridge by hand.
+- Paper trading's `peak_equity` (the drawdown halt's input) is
+  reconstructed only from equity recorded at past open/close actions
+  (`portfolio_snapshots`), not from continuous mark-to-market — there is no
+  scheduler yet to mark open positions between actions. This under-counts
+  any intrabar peak between two actions, meaning real drawdown can be
+  under-reported and the halt can trip later than it ideally would. A
+  continuous pricing loop (Phase 16-ish, "system monitoring"/scheduler
+  territory) is what closes this gap properly.
+- Paper trading has never been exercised against a live Binance price feed
+  from this environment (same limitation noted for the Binance connector
+  since Phase 5) — `open_paper_trade`/`close_paper_trade`'s correctness is
+  proven against a fake ticker in 9 DB integration tests, and the API/UI
+  request path is proven live end-to-end up to the point of the Binance
+  call itself, but a real fill has not happened yet.
 - The Phase 15 backtest reference strategy is technical-only, not the
   two-component fusion Phase 13 built for live signals — `predict_latest`
   only scores the latest bar, and there is no per-bar/at-time LightGBM
@@ -530,29 +593,32 @@ the full REST contract, and the WebSocket protocol.
 
 ## Next phase
 
-**Phase 15b — paper trading execution API.**
+**Phase 16 — system monitoring and the scheduler.**
 
-Phase 15 found that the pages it set out to build for `orders`/`positions`/
-`trades` had nothing real to wire to: Phase 11 built the paper trading
-*simulation* engine, not an execution *service*. This phase is that missing
-layer — the one that turns the engine into something a signal, or a person,
-can actually act through.
+Every Tier 1 decision-making piece now exists and is reachable: market data
+→ features → structure → LightGBM → fused signal (Phase 13), and a person
+can act on one manually through the risk engine into a real paper position
+(Phase 15b). Nothing yet runs any of this on its own — there is no
+scheduler, and no continuous loop marking open positions to market. Phase
+16 is that missing heartbeat, not a new decision-making capability.
 
-1. An execution entrypoint that takes an approved trade (from the risk
-   engine, Phase 10) and actually calls `PaperTradingEngine.open_position`/
-   `close_position` against persisted state, writing real `PaperOrder`/
-   `PaperPosition`/`Trade` rows — not just the in-memory `Portfolio` a
-   backtest run discards afterward.
-2. `orders`/`positions`/`trades` API un-pended: current open positions,
-   order history, closed trades with realised P&L, backed by the rows (1)
-   writes.
-3. Whether entry is manual (a "place this paper trade" action a person
-   triggers) or automatic (a live signal becomes an order without a human
-   in the loop) is an open decision this phase must make explicitly and
-   record — not something to default into silently. Either way, every
-   entry goes through the risk engine with no bypass (§31), and no
-   martingale / no guaranteed-profit language applies to how it's framed
-   (§56/§57).
-4. Positions/Orders/Trades frontend pages, once real data exists to show —
-   continuing "never fake a feature": these stay `NOT_IMPLEMENTED` until
-   step 1 gives them something genuine to display.
+1. A scheduler that periodically (a) computes technical features for new
+   closed candles arriving on the live stream (Phase 5/8's wiring already
+   exists per-candle; this is the box that keeps it running unattended),
+   (b) marks open paper positions to market and writes a
+   `portfolio_snapshots` row so `peak_equity`/drawdown stop being an
+   approximation reconstructed only from open/close events (Phase 15b's
+   disclosed limitation), and (c) checks `process_bar`-style stop/target/
+   trailing-stop exits on open positions between manual actions — right now
+   a stop-loss on an open paper position only gets checked at the moment
+   someone calls `close`, not continuously.
+2. Whether a live-generated `Signal` becomes an order automatically, and
+   under what policy, is still the open decision Phase 15 flagged and
+   Phase 15b deliberately left unmade — Phase 16's scheduler is the natural
+   place that decision gets implemented, once it exists, but making it is
+   not automatic just because the heartbeat exists.
+3. System monitoring surfaces: the `/system/health` component list has
+   tracked "not implemented" placeholders for `scheduler` since Phase 3;
+   this is where that becomes real, plus whatever operational visibility
+   (last-tick freshness, missed-cycle detection) a person needs to trust an
+   unattended loop is actually running.
