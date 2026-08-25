@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 12 of 20
+Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 13 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -281,6 +281,48 @@ and every Tier 2 component `DISABLED`.
   90% win rate *and* a negative expectancy, so win rate can never be mistaken
   for the objective.
 
+**Phase 13 — signal fusion (technical + LightGBM)**
+- `app/signals/technical_score.py`: maps the Phase 7/8 indicator and market
+  structure features into a single technical opinion on the unified [0,1]
+  scale (§30a). Four sub-signals (trend, momentum, directional movement,
+  structure) are averaged only over the ones actually available; with none
+  available it returns a neutral `0.5` score at `0.0` confidence rather than
+  guessing. Confidence is discounted both by how many sub-signals fired
+  (completeness) and by a volatility penalty, so a technically "confident"
+  score computed from a thin feature set or during a high-volatility regime
+  is never reported with unwarranted certainty.
+- `app/signals/fusion.py`: combines any number of `ComponentScore`s (Tier 1
+  uses exactly two: `TECHNICAL`, `LIGHTGBM`) into one `BUY | SELL | WAIT |
+  NO_VALID_SETUP` decision (§54). An inactive component (no model registered,
+  no features computed yet) is excluded from the weighted average entirely —
+  it is never scored as a neutral `0.5` opinion, which would silently dilute
+  the fused confidence toward "no signal" instead of honestly reporting "no
+  opinion". `NO_VALID_SETUP` fires only when there is nothing to evaluate at
+  all; a merely low-confidence or too-near-neutral fusion is `WAIT`, a
+  distinct and more informative outcome.
+- `app/signals/service.py` orchestrates both against the database: it reads
+  the latest `TechnicalFeature` row and the best available `ModelVersion`
+  (`VALIDATED` preferred over `CANDIDATE` — there is no `PRODUCTION` concept
+  reachable yet, since nothing has been promoted through Phase 12's
+  backtesting), reuses Phase 9's `predict_latest`/`fusion_score_from_probabilities`
+  for the LightGBM leg, fuses, and persists a `Signal` with its
+  `SignalComponent` children. The natural key (`symbol`, `timeframe`,
+  `open_time`, `strategy_version`, `venue`) is upserted, so re-running fusion
+  for a bar already evaluated updates the same row rather than growing a
+  duplicate history (§80 reproducibility). `WAIT` and `NO_VALID_SETUP` are
+  persisted like any other outcome (§54) — only the complete absence of a
+  technical feature row to anchor to (nothing computed yet for that
+  symbol/timeframe) skips persistence, since there is no `open_time` to key
+  it against.
+- `signals` API un-pended: `GET /signals` (recent, filterable), `GET
+  /signals/latest`, `POST /signals/generate`. Literal routes are registered
+  before any dynamic ones, per the Phase 9 route-ordering lesson.
+- Signal generation never touches the risk engine, position sizing, or order
+  placement — those stay out of scope until the pieces they depend on
+  (Phase 10/11, already built) are wired together in a later phase. A
+  generated signal's `risk_decision`/`risk_reason` columns exist in the
+  schema but are left `NULL` here; nothing sets them yet.
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -297,9 +339,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 399 | pass |
+| Backend unit | 427 | pass |
 | Backend API + WebSocket integration | 41 | pass |
-| Backend database integration | 46 | pass (real PostgreSQL 16); skip without one |
+| Backend database integration | 52 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
@@ -349,10 +391,10 @@ the full REST contract, and the WebSocket protocol.
   connection. `wma` and `cci` use a per-row Python callback under pandas
   `rolling().apply()`, which is O(n·period) — fine at today's data volumes,
   worth profiling once years of 15m history are involved.
-- No frontend surface shows technical features or market structure yet; the
-  Data page (Phase 6) covers candle coverage only. A Market/Signals page is
-  the natural home for both and is deferred to when Phase 13 (signal fusion)
-  needs one, rather than building a second interim page now.
+- No frontend surface shows technical features, market structure, or fused
+  signals yet; the Data page (Phase 6) covers candle coverage only. A
+  Market/Signals page is the natural home for all three and lands in
+  Phase 14 (React frontend core pages).
 - Market structure's swing-detection window (`SWING_WINDOW = 5`) and false-
   breakout confirmation window (`FALSE_BREAKOUT_WINDOW = 3`) are reasonable
   defaults, not validated against real price action yet — that validation is
@@ -378,30 +420,45 @@ the full REST contract, and the WebSocket protocol.
 - `POSTGRES_PASSWORD` is fixed when PostgreSQL first initialises its data
   directory; changing it in `.env` afterwards causes an authentication failure
   until the server password is changed to match (see TROUBLESHOOTING.md).
+- Signal fusion (Phase 13) is Tier 1 scope only: exactly `TECHNICAL` and
+  `LIGHTGBM` components, per §30/§86. `PATTERN`, `REGIME`, `TRANSFORMER`,
+  `NEWS`, `FUNDAMENTAL`, `LOCAL_LLM`, and `CLAUDE` component kinds already
+  exist in the `SignalComponentKind` enum (Phase 1 schema) but nothing
+  produces them yet; there is no placeholder standing in for them in the
+  fused score.
+- A generated `Signal` never has its `risk_decision`/`risk_reason` columns
+  populated — signal generation does not call the risk engine (Phase 10).
+  Wiring a signal through risk evaluation and into an order is a later
+  phase's job, once there is an order to place (Phase 11 already exists as
+  paper trading, but nothing yet drives it from a live signal automatically).
+- Signal fusion has only been exercised against synthetic candles and a
+  LightGBM model trained on synthetic data, same as Phase 9 — the fused
+  score's real-world behaviour on BTC/ETH/BNB history is unknown until a
+  real backfill, real feature computation, and a real training run precede it.
 
 ## Next phase
 
-**Phase 10 — risk engine.**
+**Phase 14 — React frontend core pages.**
 
-The highest-authority component (§31): no model, no LLM, no frontend request
-may bypass it. Every risk parameter is already defined once, frozen, in
-`app/config/risk_config.py` (Phase 1) — Phase 10 is the engine that enforces
-those limits, not a place that redefines them.
+Phases 1-13 built a complete, tested Tier 1 decision pipeline (market data →
+features → structure → LightGBM → fused signal) with nowhere for a human to
+see it. Phase 14 is the first frontend work since Phase 3/6's read-only
+Data page.
 
-1. `APPROVED | REJECTED | PAUSED` decisions with a human-readable reason,
-   checked against every §31 parameter: exposure, daily loss, drawdown,
-   consecutive losses, slippage/spread protection, stale-data protection
-   (already computable via `BinanceService.data_is_stale`, Phase 5),
-   API-failure protection (already tracked via `consecutive_failures`,
-   Phase 5), model-health protection.
-2. Position sizing (§32): balance, risk percentage, stop distance, fees,
-   slippage, exchange filters (`SymbolFilters`, Phase 5) — `REJECT:
-   TRADE_NOT_ECONOMIC` is an expected outcome at this account size, not an
-   edge case to special-case away.
-3. `risk_events` persisted for every rejection/pause, not only approvals.
-4. `risk` API un-pended: current state, rejection history, live parameter
-   values (read-only — changing a risk parameter is a Settings concern, not
-   this engine's).
+1. Dashboard: system health/tiers (already served by Phase 3), live
+   candle coverage (Phase 6), and the latest fused signal per symbol/timeframe
+   (Phase 13's `GET /signals/latest`) with its full component breakdown —
+   the UI must show *why* a signal fired, not just the action.
+2. A Signals page: recent signal history (`GET /signals`), filterable by
+   symbol/timeframe/action, each row expandable to its `SignalComponent`
+   rows and `reason_codes` — the decision-chain transparency §79/§80 already
+   persist, finally made visible.
+3. A Models page: registry listing (`GET /models`), training trigger and
+   status (`POST /models/train`, `GET /models/train/status`) — already built
+   API surface (Phase 9), no UI yet.
+4. Continue the "never fake a feature" discipline on the frontend: an
+   unbuilt namespace's `501 NOT_IMPLEMENTED` response renders as an explicit
+   "not implemented yet" state, never a blank chart or a zeroed metric.
 
 No martingale (§56), no guaranteed-profit language anywhere it touches the
 frontend contract (§57). Then Phase 11 (paper trading simulator) and Phase 12

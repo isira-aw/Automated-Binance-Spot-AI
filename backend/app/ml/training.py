@@ -47,7 +47,7 @@ class TrainingOutcome:
     metrics: dict[str, object] | None = None
 
 
-def _model_id(symbol: str, timeframe: str) -> str:
+def model_id_for(symbol: str, timeframe: str) -> str:
     return f"lightgbm_{symbol.lower()}_{timeframe}"
 
 
@@ -60,7 +60,7 @@ async def run_training_job(
     job_id: str | None = None,
 ) -> TrainingOutcome:
     job_id = job_id or uuid.uuid4().hex
-    model_id = _model_id(symbol, timeframe)
+    model_id = model_id_for(symbol, timeframe)
     started_at = utc_now()
 
     run = TrainingRun(
@@ -109,7 +109,7 @@ async def run_training_job(
 async def _train_and_register(
     session: AsyncSession, settings: Settings, *, symbol: str, timeframe: str, job_id: str
 ) -> TrainingOutcome:
-    model_id = _model_id(symbol, timeframe)
+    model_id = model_id_for(symbol, timeframe)
     models = settings.models
 
     frame = await build_training_frame(

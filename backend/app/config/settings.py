@@ -307,6 +307,20 @@ class ModelsConfig(BaseModel):
     min_validation_macro_f1: float = Field(default=0.25, ge=0.0, le=1.0)
     min_training_rows: int = Field(default=500, ge=1)
 
+    # --- Signal fusion (§30) -----------------------------------------------
+    # Tier 1 fuses exactly two components; Tier 2 (pattern, regime,
+    # transformer, news, fundamental, local LLM, Claude) stay inactive until
+    # their own phases build them.  Weights are the versioned combination
+    # method §30b requires be specified, not "figure it out later" -- changing
+    # them is a strategy_version change, not a silent behavioural drift.
+    technical_component_weight: float = Field(default=0.4, ge=0.0)
+    lightgbm_component_weight: float = Field(default=0.6, ge=0.0)
+    # A signal below this confidence is WAIT, never a forced guess (§86).
+    fusion_min_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
+    # How far from neutral (0.5) the fused score must sit to imply a
+    # direction at all, before the confidence gate is even considered.
+    fusion_action_margin: float = Field(default=0.1, ge=0.0, le=0.5)
+
 
 class LLMConfig(EnvModel):
     """Tier 2 — disabled by default; Tier 1 runs without it (§6, §7, §8)."""
