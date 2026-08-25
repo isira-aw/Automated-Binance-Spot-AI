@@ -14,10 +14,6 @@ from app.core.errors import NotImplementedYetError
 
 # namespace -> (tier, the MVP/Tier-1 phase that will implement it)
 PENDING_NAMESPACES: dict[str, tuple[str, str]] = {
-    "orders": ("TIER_1", "Phase 11: internal paper trading simulator"),
-    "positions": ("TIER_1", "Phase 11: internal paper trading simulator"),
-    "trades": ("TIER_1", "Phase 11: internal paper trading simulator"),
-    "paper-trading": ("TIER_1", "Phase 11: internal paper trading simulator"),
     "binance": ("TIER_1", "Phase 5: Binance connector"),
     "training": ("TIER_2", "Phase 28: model registry and retraining"),
     "patterns": ("TIER_2", "Phase 21: pattern engine"),

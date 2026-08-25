@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backtesting.engine import BacktestEngine, HistoricalBar, StrategyDecision
-from app.binance.exchange_metadata import SymbolFilters
+from app.binance.filters import resolve_symbol_filters
 from app.config import Settings
 from app.core.errors import ValidationError
 from app.core.logging_config import get_logger
@@ -76,14 +76,6 @@ async def _load_features(
         )
     ).scalars().all()
     return {row.open_time: row.features for row in rows}
-
-
-def _resolve_filters(
-    binance_service: BinanceService | None, symbol: str
-) -> tuple[SymbolFilters, str]:
-    if binance_service is not None and binance_service.metadata.has(symbol):
-        return binance_service.metadata.get(symbol).filters, "live exchange metadata"
-    return SymbolFilters(), "default (no exchange metadata cached) -- no constraint applied"
 
 
 def _make_strategy(
@@ -176,7 +168,7 @@ async def run_backtest(
         range_end=range_end,
     )
 
-    filters, filters_source = _resolve_filters(binance_service, symbol)
+    filters, filters_source = resolve_symbol_filters(binance_service, symbol)
 
     bars = [
         HistoricalBar(

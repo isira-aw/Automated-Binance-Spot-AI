@@ -6,10 +6,13 @@ import { Dashboard } from '@/pages/Dashboard';
 import { DataPage } from '@/pages/DataPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { ModelsPage } from '@/pages/ModelsPage';
+import { OrdersPage } from '@/pages/OrdersPage';
+import { PositionsPage } from '@/pages/PositionsPage';
 import { RiskPage } from '@/pages/RiskPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SignalsPage } from '@/pages/SignalsPage';
 import { SystemPage } from '@/pages/SystemPage';
+import { TradesPage } from '@/pages/TradesPage';
 import { PENDING_PAGES, PendingPage, type PendingPageKey } from '@/pages/pending';
 
 export function App() {
@@ -25,6 +28,9 @@ export function App() {
         <Route path="models" element={<ModelsPage />} />
         <Route path="risk" element={<RiskPage />} />
         <Route path="backtesting" element={<BacktestingPage />} />
+        <Route path="positions" element={<PositionsPage />} />
+        <Route path="orders" element={<OrdersPage />} />
+        <Route path="trades" element={<TradesPage />} />
         {(Object.keys(PENDING_PAGES) as PendingPageKey[]).map((name) => (
           <Route key={name} path={name} element={<PendingPage name={name} />} />
         ))}
