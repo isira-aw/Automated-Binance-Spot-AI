@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 16 of 20
+Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 17 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -235,6 +235,56 @@ and every Tier 2 component `DISABLED`.
   exercised, per the Phase 5 Binance-connectivity limitation noted
   throughout). Full backend suite: 552 passing (436 unit / 41 API+WS / 75
   DB integration).
+
+**Phase 17 — end-to-end testing**
+- `tests/integration/test_e2e_signal_to_trade.py` (new): one test driving
+  the real chain candles → technical features → LightGBM training → a
+  fused `Signal` → a manually-placed paper trade linked to that signal →
+  the scheduler's `monitor_open_positions` carrying it to a take-profit
+  exit → a `Trade` row with `signal_id` intact and the right numbers.
+  Every phase from 7 through 16 has its own unit/DB-integration tests, but
+  none of them proved the pieces agree with each other at the seams; this
+  is the test that would have caught a units mismatch or a sign error two
+  individually-correct components nonetheless disagreed on. It passed on
+  the first run — a real result (the individual phase tests were sound at
+  their boundaries), not a formality.
+- A Playwright E2E suite (new: `frontend/playwright.config.ts`,
+  `frontend/e2e/`) drives the identical chain through the actual browser
+  UI — generate a signal on the Signals page and confirm its component
+  breakdown, place a paper trade from the Positions page, confirm the
+  Orders/Trades pages load. `frontend/e2e/seed.py` seeds the data first
+  (imports the backend package directly to reuse its exact feature/
+  training code, run with the backend's venv) — deliberately separate from
+  the browser test itself, the same split a CI pipeline would use (bring
+  up the stack, seed, then test). `npm run test:e2e` runs it against a
+  running stack.
+- The Positions E2E test asserts the UI reaches a *definitive* result (a
+  new position, or a visible error) rather than asserting a fill
+  specifically succeeded: placing a paper trade needs a live Binance
+  price, unreachable from every environment this suite has run in so far.
+  Verified it actually exercises the failure path, not a vacuous pass — a
+  Binance-unavailable error banner rendered, and the database confirms zero
+  `paper_positions`/`risk_events` rows resulted, so the assertion isn't
+  trivially satisfied by a lucky early return.
+- Found and fixed a real, unrelated bug while adding this: `npm run
+  typecheck` (`tsc --noEmit` with no project reference) was checking
+  **zero files** — the root `tsconfig.json` is a solution-style config
+  (`files: []` plus `references`), which plain `tsc` silently ignores
+  unless invoked with `-b`. Every "`tsc` clean" claim made throughout this
+  entire build was true by vacuous success, not by anything having
+  actually been checked; `npm run build` (which does use `tsc -b`) would
+  have caught real errors, but nothing in the day-to-day phase workflow
+  ran it. Confirmed by deliberately breaking a file: the old script passed,
+  `tsc -b` caught it immediately — and caught one pre-existing real type
+  error in `test/api.test.ts` along with it (an under-typed mock made
+  `fetchMock.mock.calls[0]` infer as `[]`, so the test's own type assertion
+  was unsound). Fixed both the script (now `tsc -b`) and the test, and
+  extended `tsconfig.node.json` to include `playwright.config.ts`/`e2e/` so
+  the new E2E files are actually checked too, not silently exempt the same
+  way the rest of the project was.
+- Also found two build artifacts (`frontend/tsconfig.*.tsbuildinfo`) that
+  had been committed to git by accident with no `.gitignore` entry;
+  untracked them and added the rule.
 
 **Phase 5 — Binance market-data connector**
 - `BinanceService` over a REST client, WebSocket stream client, market-data
@@ -522,8 +572,9 @@ Nothing.
 | --- | --- | --- |
 | Backend unit | 436 | pass |
 | Backend API + WebSocket integration | 41 | pass |
-| Backend database integration | 75 | pass (real PostgreSQL 16); skip without one |
+| Backend database integration | 76 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 14 | pass |
+| Frontend E2E (Playwright) | 4 | pass, requires the stack running + e2e/seed.py |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
 
@@ -669,27 +720,30 @@ the full REST contract, and the WebSocket protocol.
 
 ## Next phase
 
-**Phase 17 — end-to-end testing.**
+**Phase 18 — finish migration/backup/restore.**
 
-Every Tier 1 piece now exists individually, tested at the unit and DB
-integration layer: market data → features → structure → LightGBM → fused
-signal (Phase 13), risk-gated manual paper execution (Phase 15b), and an
-unattended loop keeping positions monitored between actions (Phase 16).
-None of it has been tested as one continuous path — seed candles, compute
-features, generate a signal, place a paper trade from it by hand, let the
-scheduler carry it to a stop/target exit, and check the resulting `Trade`
-and metrics are what the chain of individual pieces should produce.
+`scripts/manage.py` (migrate, backup, restore, list-backups, export, import,
+verify) was written in Phase 1 and has never been exercised by any
+automated test or a real run since — it shells out to `docker compose run
+--rm postgres pg_dump/pg_restore` by design (§49/§50: never trust Docker
+layer state), which this development session has never had a Docker daemon
+to run. That is the same disclosed limitation that has applied to every
+Docker-dependent claim throughout this build (Phase 1's "verified on real
+infrastructure" note exists precisely because of it) — Phase 18 finishing
+this genuinely needs a machine with Docker, i.e. the target/user machine,
+not this session.
 
-1. A true end-to-end test (or a small suite of them) exercising that full
-   chain against a real database, asserting on the final state rather than
-   any one component's isolated behaviour — the kind of test that would
-   have caught a units mismatch or a sign error between two correctly-unit-
-   tested pieces that nonetheless disagree at their seam.
-2. Frontend E2E: a browser-driven pass (Playwright, matching what this
-   session already used for manual verification) covering the same chain
-   through the actual UI — Signals → Positions → Trades — codified as a
-   repeatable test rather than a one-off manual session.
-3. Whatever this surfaces about the seams between phases (naming
-   mismatches, an assumption one phase made that the next didn't share) is
-   the actual point of this phase — Phase 17 is a correctness pass across
-   the whole system, not new capability.
+1. A real backup → restore round-trip against the deployed stack: back up a
+   database with real data, restore it into a fresh instance, verify the
+   data matches — the thing `cmd_backup`/`cmd_restore` claim to do but that
+   has never actually been run end to end.
+2. `export`/`import` verified the same way across two separate machines or
+   at least two separate Docker volumes, since their whole purpose is
+   moving a backup off the machine that made it.
+3. Whatever this surfaces (a missing table in `BACKED_UP_TREES`, a
+   `pg_dump`/`pg_restore` version mismatch, a manifest that doesn't
+   actually round-trip) gets fixed before this is called done — "the
+   script exists and reads plausibly" is exactly the kind of untested claim
+   this project's own discipline exists to catch.
+4. A short operational runbook (when to back up, how to restore during an
+   incident) if the scripts' own `--help` output doesn't already cover it.
