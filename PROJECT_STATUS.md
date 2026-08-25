@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 9 of 20
+Last updated: 2026-08-24 · Track: **MVP / Tier 1** · Phase 12 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -203,6 +203,84 @@ and every Tier 2 component `DISABLED`.
   detail handler instead — fixed by registering literal-path routes before
   the dynamic ones.
 
+**Phase 10 — risk engine**
+- `app/risk/engine.py`: the highest-authority component (§31). Returns
+  `APPROVED | REJECTED | PAUSED` with a human-readable reason the frontend
+  surfaces verbatim (§101). Every limit is read from `RiskConfig` — this
+  module enforces, it never redefines.
+- Rule ordering is deliberate and tested: system health (emergency stop,
+  stale data, API failures, model health) → account halts (daily loss,
+  drawdown, loss streak) → per-trade checks (spread, volatility, slippage,
+  cooldown, exposure, sizing). The first two produce `PAUSED`, the last
+  `REJECTED`. Evaluating the other way round would let a per-trade rejection
+  mask an account-level halt, reading to an operator as "that trade was bad"
+  when the truth is "trading is stopped".
+- `app/risk/position_sizing.py` (§32): sizes from equity, risk fraction, stop
+  distance, fees and the live exchange filters from Phase 5. Rounds **down**
+  onto the lot grid, never nearest, so a rounding artefact can only reduce
+  risk below a cap and never nudge it above one. `TRADE_NOT_ECONOMIC` is a
+  normal, expected answer at <$50 (§88), never suppressed or forced.
+- Round-trip fees exceeding the amount risked reject the trade (§86): an
+  edge smaller than its own transaction costs is not a trade.
+- No martingale (§56) is enforced structurally, not by convention — risk is
+  a constant fraction of equity, so a losing streak cannot size up; there is
+  a test asserting exactly that.
+- Authority is tested as a property: no `REJECTED`/`PAUSED` assessment ever
+  carries a usable size, so a caller that ignores `decision` still cannot
+  construct an order.
+- `risk_events` records every rejection and pause (never approvals — those
+  become orders, and duplicating one fact across two tables invites them to
+  disagree), so "why didn't it trade?" is answerable after the fact.
+- `risk` API un-pended, read-only by design: `GET /risk/parameters`,
+  `GET /risk/state`, `GET /risk/events`. There is deliberately no endpoint
+  that changes a limit — that is a Settings concern (§64).
+
+**Phase 11 — internal paper trading simulator**
+- Real market data, simulated execution: fills, fees, slippage, partial
+  fills, balances, positions, P&L (§11B, §83).
+- Split into pure, I/O-free modules (`fills.py`, `portfolio.py`,
+  `simulator.py`) precisely so Phase 12 reuses them — §35 requires the
+  backtest to share components with paper trading, and a backtest whose
+  fills differ from paper trading's is not a backtest of this system.
+- Slippage always moves against the trader; fees are always charged; there
+  is no zero-cost path through the fill model (§87).
+- Decimal throughout: float accumulation over thousands of fills drifts, and
+  a drifting equity curve is a performance metric that lies.
+- Win/loss is measured **net** of fees (§41). A symbol missing from the price
+  map is valued at its entry price rather than dropped, so a data gap cannot
+  show a phantom loss that trips the drawdown halt on its own.
+- Every entry routes through the risk engine, and `open_position` re-validates
+  the assessment rather than trusting its caller — the risk engine's authority
+  has to hold even against a bug in the simulator itself.
+- **A real intrabar-ordering bug was found and fixed**: the trailing stop was
+  ratcheted from a bar's high, then that same bar's low was tested against the
+  raised stop — silently assuming the high came first and handing the trade a
+  better exit than OHLC can justify (§82). Exits now test against the stop as
+  it stood entering the bar. The regression test carries a negative control:
+  with the eager ratchet restored, the trade books a profit that never happened.
+
+**Phase 12 — backtesting engine**
+- Event-driven, bar by bar, driving the **same** `PaperTradingEngine` over
+  historical bars rather than reimplementing execution (§35).
+- Lookahead prevention is structural, not advisory: the strategy callback
+  receives `bars[0..i]` only, so a strategy cannot read a future bar even by
+  accident. A test confirms a strategy indexing past its history gets an
+  `IndexError` rather than tomorrow's price.
+- Every run records the §82 audit disclosures — fee model, slippage model,
+  fill model, lookahead prevention, intrabar assumption, liquidity assumption,
+  survivorship note. A run without them is not a meaningful result and the
+  tests assert all seven are present and non-trivial.
+- Open positions are force-closed at the end of the window, so a result
+  reflects realised outcomes rather than an open position's paper gain.
+- `metrics.py` implements the §41 set once (net P&L, win/loss rate, profit
+  factor, expectancy, Sharpe, Sortino, max drawdown, exposure, fees,
+  slippage). Undefined metrics return `None`, never a fabricated number:
+  profit factor with no losses is undefined rather than infinite, and Sharpe
+  on a flat curve is undefined rather than zero.
+- A test pins §41's own caution: nine small wins and one large loss shows a
+  90% win rate *and* a negative expectancy, so win rate can never be mistaken
+  for the objective.
+
 **Phase 18 (partial) — migration tooling**
 - `scripts/manage.py` (backup, restore, export, import, migrate, verify) with
   Makefile and PowerShell wrappers.
@@ -219,9 +297,9 @@ Nothing.
 
 | Suite | Count | Result |
 | --- | --- | --- |
-| Backend unit | 261 | pass |
-| Backend API + WebSocket integration | 38 | pass |
-| Backend database integration | 42 | pass (real PostgreSQL 16); skip without one |
+| Backend unit | 399 | pass |
+| Backend API + WebSocket integration | 41 | pass |
+| Backend database integration | 46 | pass (real PostgreSQL 16); skip without one |
 | Frontend (vitest) | 12 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
