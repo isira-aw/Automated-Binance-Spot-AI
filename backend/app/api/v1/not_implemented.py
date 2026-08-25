@@ -17,7 +17,6 @@ PENDING_NAMESPACES: dict[str, tuple[str, str]] = {
     "orders": ("TIER_1", "Phase 11: internal paper trading simulator"),
     "positions": ("TIER_1", "Phase 11: internal paper trading simulator"),
     "trades": ("TIER_1", "Phase 11: internal paper trading simulator"),
-    "backtests": ("TIER_1", "Phase 12: backtesting engine"),
     "paper-trading": ("TIER_1", "Phase 11: internal paper trading simulator"),
     "binance": ("TIER_1", "Phase 5: Binance connector"),
     "training": ("TIER_2", "Phase 28: model registry and retraining"),

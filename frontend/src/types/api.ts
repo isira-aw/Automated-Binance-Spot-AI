@@ -136,3 +136,197 @@ export interface IntegrityReportEntry {
   is_clean: boolean;
   checked_at: string;
 }
+
+// --- Model registry (§39, §59) ---------------------------------------------
+
+export type ModelStatus = 'CANDIDATE' | 'VALIDATED' | 'PRODUCTION' | 'ARCHIVED' | 'REJECTED';
+
+export interface ModelVersionOut {
+  model_id: string;
+  version: string;
+  model_type: string;
+  status: ModelStatus;
+  symbol: string | null;
+  timeframe: string | null;
+  feature_version: string;
+  artifact_sha256: string | null;
+  training_data_range: Record<string, unknown> | null;
+  validation_range: Record<string, unknown> | null;
+  test_range: Record<string, unknown> | null;
+  hyperparameters: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
+  created_at: string;
+  promoted_at: string | null;
+  notes: string | null;
+}
+
+export interface TrainRequest {
+  symbol: string;
+  timeframe: string;
+}
+
+export interface TrainingOutcomeOut {
+  job_id: string;
+  status: string;
+  model_version: string | null;
+  registry_status: string | null;
+  error: string | null;
+  metrics: Record<string, unknown> | null;
+}
+
+export interface TrainingStatusOut {
+  running: boolean;
+  outcome: TrainingOutcomeOut | null;
+}
+
+// --- Signal fusion (§30, §59) -----------------------------------------------
+
+export type SignalAction = 'BUY' | 'SELL' | 'EXIT' | 'WAIT' | 'NO_VALID_SETUP';
+export type SignalComponentKind =
+  | 'TECHNICAL'
+  | 'PATTERN'
+  | 'REGIME'
+  | 'LIGHTGBM'
+  | 'TRANSFORMER'
+  | 'NEWS'
+  | 'FUNDAMENTAL'
+  | 'LOCAL_LLM'
+  | 'CLAUDE';
+
+export interface SignalComponentOut {
+  kind: SignalComponentKind;
+  score: number;
+  weight: number;
+  confidence: number | null;
+  version: string | null;
+  active: boolean;
+  details: Record<string, unknown> | null;
+}
+
+export interface SignalOut {
+  id: number;
+  symbol: string;
+  timeframe: string;
+  open_time: string;
+  generated_at: string;
+  action: SignalAction;
+  score: number;
+  confidence: number;
+  reason_codes: string[];
+  strategy_version: string;
+  fusion_method: string;
+  reference_price: number | null;
+  risk_decision: string | null;
+  risk_reason: string | null;
+  venue: string;
+  components: SignalComponentOut[];
+}
+
+export interface GenerateSignalRequest {
+  symbol: string;
+  timeframe: string;
+}
+
+// --- Risk (§31, §59) ---------------------------------------------------------
+
+export interface RiskParametersOut {
+  max_risk_per_trade: number;
+  max_position_size: number;
+  max_asset_exposure: number;
+  max_portfolio_exposure: number;
+  max_simultaneous_positions: number;
+  max_daily_loss: number;
+  max_drawdown: number;
+  max_consecutive_losses: number;
+  max_slippage: number;
+  spread_protection: number;
+  volatility_protection: number;
+  stale_data_protection_seconds: number;
+  api_failure_protection_threshold: number;
+  model_health_protection: boolean;
+  cooldown_period_seconds: number;
+}
+
+export interface RiskEventOut {
+  id: number;
+  timestamp: string;
+  venue: string;
+  symbol: string | null;
+  decision: string;
+  rule: string;
+  reason: string;
+  details: Record<string, unknown> | null;
+}
+
+export interface RiskStateOut {
+  trading_permitted: boolean;
+  decision: string;
+  rule: string | null;
+  reason: string | null;
+  engine_state: string;
+  checked_at: string;
+}
+
+// --- Backtests (§35, §41, §82, §59) ------------------------------------------
+
+export interface BacktestRunRequest {
+  symbol: string;
+  timeframe: string;
+  range_start: string;
+  range_end: string;
+}
+
+export interface BacktestTradeOut {
+  symbol: string;
+  side: string;
+  quantity: number;
+  entry_time: string;
+  entry_price: number;
+  exit_time: string;
+  exit_price: number;
+  gross_pnl: number;
+  fees: number;
+  slippage_cost: number;
+  net_pnl: number;
+  return_pct: number;
+  mae: number | null;
+  mfe: number | null;
+  exit_reason: string | null;
+}
+
+export interface BacktestRunOut {
+  id: number;
+  job_id: string;
+  status: string;
+  symbols: string[];
+  timeframe: string;
+  range_start: string;
+  range_end: string;
+  initial_capital: number;
+  maker_fee: number;
+  taker_fee: number;
+  slippage_bps: number;
+  strategy_version: string;
+  feature_version: string | null;
+  config: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
+  assumptions: Record<string, string> | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  created_at: string;
+  trades: BacktestTradeOut[];
+}
+
+export interface BacktestRunSummaryOut {
+  id: number;
+  job_id: string;
+  status: string;
+  symbols: string[];
+  timeframe: string;
+  range_start: string;
+  range_end: string;
+  strategy_version: string;
+  metrics: Record<string, unknown> | null;
+  created_at: string;
+}

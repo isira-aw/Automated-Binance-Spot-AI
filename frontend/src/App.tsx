@@ -1,10 +1,14 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import { AppShell } from '@/components/layout/AppShell';
+import { BacktestingPage } from '@/pages/BacktestingPage';
 import { Dashboard } from '@/pages/Dashboard';
 import { DataPage } from '@/pages/DataPage';
 import { LogsPage } from '@/pages/LogsPage';
+import { ModelsPage } from '@/pages/ModelsPage';
+import { RiskPage } from '@/pages/RiskPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { SignalsPage } from '@/pages/SignalsPage';
 import { SystemPage } from '@/pages/SystemPage';
 import { PENDING_PAGES, PendingPage, type PendingPageKey } from '@/pages/pending';
 
@@ -17,6 +21,10 @@ export function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="logs" element={<LogsPage />} />
         <Route path="data" element={<DataPage />} />
+        <Route path="signals" element={<SignalsPage />} />
+        <Route path="models" element={<ModelsPage />} />
+        <Route path="risk" element={<RiskPage />} />
+        <Route path="backtesting" element={<BacktestingPage />} />
         {(Object.keys(PENDING_PAGES) as PendingPageKey[]).map((name) => (
           <Route key={name} path={name} element={<PendingPage name={name} />} />
         ))}

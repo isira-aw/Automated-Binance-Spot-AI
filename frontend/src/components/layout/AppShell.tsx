@@ -8,6 +8,7 @@ const TIER1_PAGES = [
   ['/', 'Dashboard'],
   ['/market', 'Market'],
   ['/signals', 'Signals'],
+  ['/models', 'Models'],
   ['/positions', 'Positions'],
   ['/orders', 'Orders'],
   ['/trades', 'Trades'],
@@ -20,7 +21,6 @@ const TIER1_PAGES = [
 ] as const;
 
 const TIER2_PAGES = [
-  ['/models', 'Models'],
   ['/training', 'Training'],
   ['/patterns', 'Patterns'],
   ['/news', 'News'],

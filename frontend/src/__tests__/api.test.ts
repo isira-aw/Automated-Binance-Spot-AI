@@ -96,4 +96,31 @@ describe('apiPost', () => {
       status: 422,
     });
   });
+
+  it('serializes a request body as JSON with the matching content type', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { action: 'WAIT' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiPost('/signals/generate', { symbol: 'BTCUSDT', timeframe: '1h' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/signals/generate',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ symbol: 'BTCUSDT', timeframe: '1h' }),
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
+    );
+  });
+
+  it('omits a body and the content-type header when none is given', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { running: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiPost('/market/backfill');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBeUndefined();
+    expect(init.headers).not.toHaveProperty('Content-Type');
+  });
 });

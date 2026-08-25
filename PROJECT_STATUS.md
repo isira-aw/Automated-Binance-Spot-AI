@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 13 of 20
+Last updated: 2026-08-25 · Track: **MVP / Tier 1** · Phase 15 of 20
 
 **Phase 1 is verified running on real infrastructure.** `docker compose up -d`
 brings up postgres, redis, backend and frontend; migrations apply
@@ -49,11 +49,78 @@ and every Tier 2 component `DISABLED`.
 
 **Phase 14/15 (partial) — frontend core shell**
 - React + Vite + TypeScript + Tailwind dark dashboard shell with all 17 routes.
-- Implemented pages: Dashboard, System, Settings, Logs.
+- Implemented pages: Dashboard, System, Settings, Logs, Data (Phase 6),
+  Signals and Models (Phase 14, following Phase 13's signal fusion).
 - REST client with typed errors; WebSocket client with exponential-backoff
-  reconnect and heartbeat replies.
-- Tier labelling: the UI reports which components influence decisions (today:
-  none) rather than implying Tier 2 surfaces are live.
+  reconnect and heartbeat replies. `apiPost` now carries an optional JSON
+  body, needed once an endpoint (`/signals/generate`, `/models/train`) takes
+  parameters rather than acting on nothing.
+- Tier labelling: the UI reports which components influence an *executed*
+  trade (today: none, since nothing yet wires a signal to an order) —
+  distinct from a signal simply having been generated, which the Dashboard's
+  "Latest signals" panel and the Signals page now show happening.
+- Signals page: generate a fused signal for a chosen symbol/timeframe, browse
+  recent signals, and expand any row to its full component breakdown and
+  reason codes — the §79/§80 decision chain made visible for the first time.
+- Models page: the LightGBM registry and a training trigger, reusing the
+  Phase 9 API. `/models` moved from the "Tier 2 — intelligence layer" nav
+  section to "Tier 1 — core": it is the Tier 1 baseline model, not a Tier 2
+  research component, and the nav grouping was inconsistent with that.
+- Verified against a live backend + database in this session (not just
+  `tsc`/`eslint`/`vitest`): seeded synthetic candles, computed features,
+  trained a model, then drove the Signals and Models pages in a real browser
+  — generate-signal, the component-detail expand, and the Dashboard's latest-
+  signals panel all round-trip correctly end to end.
+
+**Phase 15 — Risk and Backtesting: backend wiring + frontend pages**
+- Discovered mid-phase that "already-built API surface" was wrong for two of
+  the four pages this phase set out to wire: `risk` had a real, tested API
+  (Phase 10) with just no UI, but `orders`/`positions`/`trades` have no REST
+  namespace *or* persistence wiring at all -- `PaperOrder`/`PaperPosition`/
+  `Trade` are Phase 2 schema with nothing that has ever written a row to
+  them, because Phase 11 built the paper-trading simulator as a pure
+  in-memory library with no execution entrypoint, manual or automatic. Built
+  what was actually ready (Risk page, and a new Backtesting backend +
+  page); re-scoped `orders`/`positions`/`trades` honestly to "Phase 15b —
+  paper trading execution API" in `PENDING_PAGES` rather than build a rushed
+  execution/persistence layer for money-shaped data under time pressure.
+- RiskPage: active limits, system-level trading-permitted state, and
+  decision history from the existing `risk` API (Phase 10) -- read-only,
+  since the engine enforces limits, it does not own their values.
+- `app/backtesting/service.py` (new): the piece Phase 12 didn't build --
+  orchestrates a real backtest run and persists it. Loads candles and
+  precomputed technical features for a range, runs the same `BacktestEngine`
+  Phase 12 tested, and persists `BacktestRun`/`BacktestTrade` (Phase 2
+  schema, unused until now). `backtests` API un-pended: `POST
+  /backtests/run`, `GET /backtests`, `GET /backtests/{id}`.
+- The backtest's reference strategy is deliberately technical-only, not the
+  two-component fusion Phase 13 built for live signals: `predict_latest`
+  only ever scores the *latest* bar, and there is no per-bar LightGBM
+  inference path today. Reusing `app/signals/fusion.py` with a single
+  `TECHNICAL` component (weight 1.0) means the fusion logic itself is not
+  reimplemented, only the model contribution is absent -- a real, disclosed
+  restriction, not a silent approximation. Extending backtests to include
+  LightGBM is deferred to when a batch/at-time prediction path exists.
+  Stop-loss/take-profit are ATR-based (`atr_stop_multiplier`/
+  `atr_reward_multiplier`, new `BacktestConfig` fields) since a long entry
+  needs a concrete stop distance for position sizing to mean anything
+  (`app/risk/position_sizing.py` rejects a sizing request without one).
+- Exchange filters for sizing/rounding come from live-cached exchange
+  metadata when available, falling back to "no constraint" and recording
+  which one was used in the persisted `assumptions` -- never a guessed
+  filter set standing in for real exchange rules.
+- A run is bounded by a new `max_bars` config cap (default 5000) and
+  rejected with a clear error over it, rather than accepting an
+  unboundedly long synchronous request.
+- BacktestingPage: submit a run, browse recent runs, and inspect one in
+  full -- the §41 metric set, all seven §82 audit disclosures, and the
+  trade log. A result is never shown without its disclosures.
+- Verified end to end against a live backend + database: seeded a strong
+  synthetic uptrend, ran a backtest via the API and via the browser UI,
+  confirmed real trades with real fees/slippage applied and metrics that
+  make sense for the input (high win rate on a low-noise uptrend, not a
+  red flag). 6 new DB integration tests for the service; 526 backend tests
+  total, all passing.
 
 **Phase 5 — Binance market-data connector**
 - `BinanceService` over a REST client, WebSocket stream client, market-data
@@ -341,8 +408,8 @@ Nothing.
 | --- | --- | --- |
 | Backend unit | 427 | pass |
 | Backend API + WebSocket integration | 41 | pass |
-| Backend database integration | 52 | pass (real PostgreSQL 16); skip without one |
-| Frontend (vitest) | 12 | pass |
+| Backend database integration | 58 | pass (real PostgreSQL 16); skip without one |
+| Frontend (vitest) | 14 | pass |
 
 Lint: `ruff` clean, `eslint --max-warnings 0` clean, `tsc --noEmit` clean.
 
@@ -391,10 +458,11 @@ the full REST contract, and the WebSocket protocol.
   connection. `wma` and `cci` use a per-row Python callback under pandas
   `rolling().apply()`, which is O(n·period) — fine at today's data volumes,
   worth profiling once years of 15m history are involved.
-- No frontend surface shows technical features, market structure, or fused
-  signals yet; the Data page (Phase 6) covers candle coverage only. A
-  Market/Signals page is the natural home for all three and lands in
-  Phase 14 (React frontend core pages).
+- No frontend surface shows technical features or market structure directly
+  yet (raw indicator/structure values, not just the fused score) — the
+  Signals page (Phase 14) shows the technical component's contribution to a
+  fused signal, but a dedicated Market page for browsing indicators candle by
+  candle is still pending (`market` remains in `PENDING_PAGES`).
 - Market structure's swing-detection window (`SWING_WINDOW = 5`) and false-
   breakout confirmation window (`FALSE_BREAKOUT_WINDOW = 3`) are reasonable
   defaults, not validated against real price action yet — that validation is
@@ -435,32 +503,56 @@ the full REST contract, and the WebSocket protocol.
   LightGBM model trained on synthetic data, same as Phase 9 — the fused
   score's real-world behaviour on BTC/ETH/BNB history is unknown until a
   real backfill, real feature computation, and a real training run precede it.
+- **Paper trading has no execution entrypoint.** `PaperOrder`, `PaperPosition`
+  and `Trade` (Phase 2 schema) have no code path that has ever written a row
+  to them. `app/paper_trading/simulator.py` (Phase 11) is a pure in-memory
+  library — real, tested, and reused as-is by both live backtesting (Phase
+  12) and this phase's Backtesting API — but nothing calls it outside a
+  backtest run. There is currently no way, manual or automatic, to open a
+  paper position against live/persisted state. `orders`/`positions`/`trades`
+  stay in the frontend's `PENDING_PAGES`, now correctly attributed to a
+  not-yet-built "Phase 15b" rather than to Phase 11 (which is complete for
+  what it actually is: a simulation engine, not an execution service).
+- The Phase 15 backtest reference strategy is technical-only, not the
+  two-component fusion Phase 13 built for live signals — `predict_latest`
+  only scores the latest bar, and there is no per-bar/at-time LightGBM
+  inference path for a historical replay yet. A backtest run's `metrics`
+  therefore describe the technical component alone, not the same decision
+  process a live-generated `Signal` used.
+- The ATR-based stop/target multipliers (`atr_stop_multiplier`,
+  `atr_reward_multiplier`) that make the backtest reference strategy's
+  entries sizeable are documented starting points, not tuned values — same
+  caveat as the label horizon/threshold and the fusion weights.
+- A backtest run is synchronous (unlike training or a signals generate call,
+  it can process thousands of bars) and bounded by `max_bars` (default
+  5000) rather than backgrounded with a status-poll pattern; a range over
+  the cap is rejected rather than silently truncated or left to time out.
 
 ## Next phase
 
-**Phase 14 — React frontend core pages.**
+**Phase 15b — paper trading execution API.**
 
-Phases 1-13 built a complete, tested Tier 1 decision pipeline (market data →
-features → structure → LightGBM → fused signal) with nowhere for a human to
-see it. Phase 14 is the first frontend work since Phase 3/6's read-only
-Data page.
+Phase 15 found that the pages it set out to build for `orders`/`positions`/
+`trades` had nothing real to wire to: Phase 11 built the paper trading
+*simulation* engine, not an execution *service*. This phase is that missing
+layer — the one that turns the engine into something a signal, or a person,
+can actually act through.
 
-1. Dashboard: system health/tiers (already served by Phase 3), live
-   candle coverage (Phase 6), and the latest fused signal per symbol/timeframe
-   (Phase 13's `GET /signals/latest`) with its full component breakdown —
-   the UI must show *why* a signal fired, not just the action.
-2. A Signals page: recent signal history (`GET /signals`), filterable by
-   symbol/timeframe/action, each row expandable to its `SignalComponent`
-   rows and `reason_codes` — the decision-chain transparency §79/§80 already
-   persist, finally made visible.
-3. A Models page: registry listing (`GET /models`), training trigger and
-   status (`POST /models/train`, `GET /models/train/status`) — already built
-   API surface (Phase 9), no UI yet.
-4. Continue the "never fake a feature" discipline on the frontend: an
-   unbuilt namespace's `501 NOT_IMPLEMENTED` response renders as an explicit
-   "not implemented yet" state, never a blank chart or a zeroed metric.
-
-No martingale (§56), no guaranteed-profit language anywhere it touches the
-frontend contract (§57). Then Phase 11 (paper trading simulator) and Phase 12
-(backtesting engine), the first two components that can actually act on a
-risk engine's APPROVED decision.
+1. An execution entrypoint that takes an approved trade (from the risk
+   engine, Phase 10) and actually calls `PaperTradingEngine.open_position`/
+   `close_position` against persisted state, writing real `PaperOrder`/
+   `PaperPosition`/`Trade` rows — not just the in-memory `Portfolio` a
+   backtest run discards afterward.
+2. `orders`/`positions`/`trades` API un-pended: current open positions,
+   order history, closed trades with realised P&L, backed by the rows (1)
+   writes.
+3. Whether entry is manual (a "place this paper trade" action a person
+   triggers) or automatic (a live signal becomes an order without a human
+   in the loop) is an open decision this phase must make explicitly and
+   record — not something to default into silently. Either way, every
+   entry goes through the risk engine with no bypass (§31), and no
+   martingale / no guaranteed-profit language applies to how it's framed
+   (§56/§57).
+4. Positions/Orders/Trades frontend pages, once real data exists to show —
+   continuing "never fake a feature": these stay `NOT_IMPLEMENTED` until
+   step 1 gives them something genuine to display.
