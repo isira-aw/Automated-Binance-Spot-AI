@@ -35,16 +35,24 @@ async def engine_db():
     await db.dispose()
 
 
+async def _truncate(session) -> None:
+    """Clean before and after: cleaning only afterwards makes a test depend on
+    the database starting empty, which fails spuriously against existing data.
+    """
+    await session.execute(RiskEvent.__table__.delete())
+    await session.commit()
+
+
 @pytest.fixture
 async def session(engine_db):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     factory = async_sessionmaker(engine_db, expire_on_commit=False)
     async with factory() as session:
+        await _truncate(session)
         yield session
         await session.rollback()
-        await session.execute(RiskEvent.__table__.delete())
-        await session.commit()
+        await _truncate(session)
 
 
 def _trade() -> TradeRequest:

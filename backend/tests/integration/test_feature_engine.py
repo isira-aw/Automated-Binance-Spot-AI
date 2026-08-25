@@ -35,17 +35,28 @@ async def engine():
     await engine.dispose()
 
 
+async def _truncate(session) -> None:
+    """Clean the tables this module owns.
+
+    Run both before and after each test: cleaning only afterwards makes a test
+    depend on the database starting empty, which fails spuriously against any
+    pre-existing data.
+    """
+    await session.execute(TechnicalFeature.__table__.delete())
+    await session.execute(Candle.__table__.delete())
+    await session.commit()
+
+
 @pytest.fixture
 async def session(engine):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
+        await _truncate(session)
         yield session
         await session.rollback()
-        await session.execute(TechnicalFeature.__table__.delete())
-        await session.execute(Candle.__table__.delete())
-        await session.commit()
+        await _truncate(session)
 
 
 async def _seed_candles(session, *, symbol: str, timeframe: str, count: int, seed: int = 0) -> None:

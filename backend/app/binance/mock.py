@@ -177,6 +177,11 @@ class MockBinanceServer:
             )
             high = max(open_price, close_price) * Decimal("1.001")
             low = min(open_price, close_price) * Decimal("0.999")
+            # Volume varies deterministically. A constant volume would make
+            # volume z-score and price/volume correlation undefined (0/0),
+            # silently disabling every volume-based feature and, downstream,
+            # every prediction that depends on one.
+            volume = Decimal(10) + _deterministic_offset(f"{symbol}:vol", index) * Decimal(4)
             rows.append(
                 [
                     open_ms,
@@ -184,9 +189,9 @@ class MockBinanceServer:
                     f"{high:.8f}",
                     f"{low:.8f}",
                     f"{close_price:.8f}",
-                    "10.00000000",
+                    f"{volume:.8f}",
                     open_ms + step_ms - 1,
-                    f"{close_price * 10:.8f}",
+                    f"{close_price * volume:.8f}",
                     100,
                     "5.00000000",
                     f"{close_price * 5:.8f}",
