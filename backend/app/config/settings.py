@@ -279,6 +279,14 @@ class BacktestConfig(BaseModel):
     maker_fee: float = 0.001
     taker_fee: float = 0.001
     slippage_bps: float = 5.0
+    # Reference strategy (§35 Phase 15): ATR-based stop/target, since a long
+    # entry needs a concrete stop distance for position sizing to mean
+    # anything at all (app/risk/position_sizing.py rejects one otherwise).
+    # Not a claim these multiples are tuned -- a documented starting point,
+    # same as the label horizon/threshold in ModelsConfig.
+    atr_stop_multiplier: float = Field(default=1.5, gt=0.0)
+    atr_reward_multiplier: float = Field(default=2.0, gt=0.0)
+    max_bars: int = Field(default=5000, ge=1)
 
 
 class ModelsConfig(BaseModel):

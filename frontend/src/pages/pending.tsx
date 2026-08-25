@@ -6,11 +6,21 @@ import { NotImplemented } from '@/components/ui/NotImplemented';
  */
 export const PENDING_PAGES = {
   market: { page: 'Market', tier: 'TIER 1', phase: 'Phase 5–6 — Binance market data and history' },
-  positions: { page: 'Positions', tier: 'TIER 1', phase: 'Phase 11 — paper trading simulator' },
-  orders: { page: 'Orders', tier: 'TIER 1', phase: 'Phase 11 — paper trading simulator' },
-  trades: { page: 'Trades', tier: 'TIER 1', phase: 'Phase 11 — paper trading simulator' },
-  backtesting: { page: 'Backtesting', tier: 'TIER 1', phase: 'Phase 12 — backtesting engine' },
-  risk: { page: 'Risk', tier: 'TIER 1', phase: 'Phase 10 — risk engine' },
+  positions: {
+    page: 'Positions',
+    tier: 'TIER 1',
+    phase: 'Phase 15b — paper trading execution API (order placement, not just simulation)',
+  },
+  orders: {
+    page: 'Orders',
+    tier: 'TIER 1',
+    phase: 'Phase 15b — paper trading execution API (order placement, not just simulation)',
+  },
+  trades: {
+    page: 'Trades',
+    tier: 'TIER 1',
+    phase: 'Phase 15b — paper trading execution API (order placement, not just simulation)',
+  },
   training: { page: 'Training', tier: 'TIER 2', phase: 'Phase 28 — model registry and retraining' },
   patterns: { page: 'Patterns', tier: 'TIER 2', phase: 'Phase 21 — pattern engine' },
   news: { page: 'News', tier: 'TIER 2', phase: 'Phase 25 — news/fundamental engine' },

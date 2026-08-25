@@ -226,3 +226,107 @@ export interface GenerateSignalRequest {
   symbol: string;
   timeframe: string;
 }
+
+// --- Risk (§31, §59) ---------------------------------------------------------
+
+export interface RiskParametersOut {
+  max_risk_per_trade: number;
+  max_position_size: number;
+  max_asset_exposure: number;
+  max_portfolio_exposure: number;
+  max_simultaneous_positions: number;
+  max_daily_loss: number;
+  max_drawdown: number;
+  max_consecutive_losses: number;
+  max_slippage: number;
+  spread_protection: number;
+  volatility_protection: number;
+  stale_data_protection_seconds: number;
+  api_failure_protection_threshold: number;
+  model_health_protection: boolean;
+  cooldown_period_seconds: number;
+}
+
+export interface RiskEventOut {
+  id: number;
+  timestamp: string;
+  venue: string;
+  symbol: string | null;
+  decision: string;
+  rule: string;
+  reason: string;
+  details: Record<string, unknown> | null;
+}
+
+export interface RiskStateOut {
+  trading_permitted: boolean;
+  decision: string;
+  rule: string | null;
+  reason: string | null;
+  engine_state: string;
+  checked_at: string;
+}
+
+// --- Backtests (§35, §41, §82, §59) ------------------------------------------
+
+export interface BacktestRunRequest {
+  symbol: string;
+  timeframe: string;
+  range_start: string;
+  range_end: string;
+}
+
+export interface BacktestTradeOut {
+  symbol: string;
+  side: string;
+  quantity: number;
+  entry_time: string;
+  entry_price: number;
+  exit_time: string;
+  exit_price: number;
+  gross_pnl: number;
+  fees: number;
+  slippage_cost: number;
+  net_pnl: number;
+  return_pct: number;
+  mae: number | null;
+  mfe: number | null;
+  exit_reason: string | null;
+}
+
+export interface BacktestRunOut {
+  id: number;
+  job_id: string;
+  status: string;
+  symbols: string[];
+  timeframe: string;
+  range_start: string;
+  range_end: string;
+  initial_capital: number;
+  maker_fee: number;
+  taker_fee: number;
+  slippage_bps: number;
+  strategy_version: string;
+  feature_version: string | null;
+  config: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
+  assumptions: Record<string, string> | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  created_at: string;
+  trades: BacktestTradeOut[];
+}
+
+export interface BacktestRunSummaryOut {
+  id: number;
+  job_id: string;
+  status: string;
+  symbols: string[];
+  timeframe: string;
+  range_start: string;
+  range_end: string;
+  strategy_version: string;
+  metrics: Record<string, unknown> | null;
+  created_at: string;
+}
