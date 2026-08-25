@@ -115,7 +115,10 @@ export function PositionsPage() {
           </button>
         </div>
         {placeError ? (
-          <div className="mt-3 rounded border border-bearish/40 bg-bearish/10 p-2 text-xs text-bearish">
+          <div
+            data-testid="place-order-error"
+            className="mt-3 rounded border border-bearish/40 bg-bearish/10 p-2 text-xs text-bearish"
+          >
             {placeError}
           </div>
         ) : null}

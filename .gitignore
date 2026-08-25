@@ -33,6 +33,11 @@ frontend/dist/
 frontend/.vite/
 *.local
 
+# ---- Playwright (Phase 17 frontend E2E) -----------------------------------
+frontend/test-results/
+frontend/playwright-report/
+frontend/tsconfig.*.tsbuildinfo
+
 # ---- Editors / OS --------------------------------------------------------
 .idea/
 .vscode/

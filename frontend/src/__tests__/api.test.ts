@@ -114,13 +114,17 @@ describe('apiPost', () => {
   });
 
   it('omits a body and the content-type header when none is given', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(200, { running: true }));
+    const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(
+      async () => jsonResponse(200, { running: true }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     await apiPost('/market/backfill');
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.body).toBeUndefined();
-    expect(init.headers).not.toHaveProperty('Content-Type');
+    const call = fetchMock.mock.calls[0];
+    if (!call) throw new Error('fetch was not called');
+    const [, init] = call;
+    expect(init?.body).toBeUndefined();
+    expect(init?.headers).not.toHaveProperty('Content-Type');
   });
 });
